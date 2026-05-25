@@ -313,7 +313,7 @@ class AsyncpgStore(Store):
                     text(
                         "INSERT INTO events ("
                         " event_id, session_id, seq, kind, payload"
-                        ") VALUES (:eid, :sid, :seq, :kind, :payload::jsonb) "
+                        ") VALUES (:eid, :sid, :seq, :kind, CAST(:payload AS jsonb)) "
                         "RETURNING event_id, session_id, seq, kind, payload, created_at"
                     ),
                     {
