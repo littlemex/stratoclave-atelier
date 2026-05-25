@@ -11,11 +11,13 @@ organizes them into groups, lets you fork from any past turn, and
 freezes a fork as an immutable, content-addressed version that can be
 referenced from other sessions.
 
-This guide walks through what you need to get the **Stage A skeleton**
-running on your laptop. Stage A is a runnable scaffold: FastAPI app,
-five-table Postgres schema, docker-compose, and a `/healthz` endpoint.
-Fork / freeze / group features land in Stage B onwards (see
-`PROJECT_STATUS.md`).
+This guide walks through what you need to get atelier running on your
+laptop. Stage A shipped a runnable scaffold (FastAPI app, five-table
+Postgres schema, docker-compose, `/healthz`); **Stage B** adds the
+`Store` Protocol with in-memory and asyncpg implementations and exposes
+the first batch of REST endpoints under `/api/groups` and
+`/api/sessions` (including fork). Freeze + JSONL ingest land in Stage C
+(see `PROJECT_STATUS.md`).
 
 ## Where atelier sits in the 4-OSS series
 
@@ -97,6 +99,37 @@ curl -s localhost:8000/healthz
 # => {"status":"ok"}
 ```
 
+## REST API (Stage B)
+
+Stage B exposes the first slice of the REST surface. All requests
+return JSON; errors come back as `{"detail": "..."}` with the standard
+HTTP status (404 for missing entities, 409 for invariant violations).
+
+```bash
+# Create a group.
+curl -s -X POST localhost:8000/api/groups \
+  -H 'content-type: application/json' \
+  -d '{"name": "ops", "description": null}'
+
+# Create a root session inside that group.
+curl -s -X POST localhost:8000/api/sessions \
+  -H 'content-type: application/json' \
+  -d '{"title": "incident-2026-05-25", "group_id": "<group_id>"}'
+
+# Fork a child session from a frozen version of the parent at turn 3.
+curl -s -X POST localhost:8000/api/sessions/<parent_id>/fork \
+  -H 'content-type: application/json' \
+  -d '{"title": "branch-A", "parent_version_id": "<version_id>", "fork_seq": 3}'
+
+# List the frozen versions belonging to a session.
+curl -s localhost:8000/api/sessions/<session_id>/versions
+```
+
+Versions are not yet writable through HTTP -- Stage C adds the freeze
+endpoint backed by the content-addressed JSONL blob store. For now the
+only way to land Versions is to insert them directly via the
+`AsyncpgStore` (e.g. from a script or integration test).
+
 ## Configuration
 
 All knobs are environment variables. Nothing is hard-coded in `src/`.
@@ -124,8 +157,17 @@ stratoclave-atelier config
 pytest
 ```
 
-Stage A only has unit tests under `tests/unit/`. The integration suite
-under `tests/integration/` is wired up but empty until Stage B.
+Stage B ships unit tests for the in-memory store, the REST handlers,
+the CLI, the config edge cases, and the `/healthz` endpoint. The
+integration suite under `tests/integration/` exercises the alembic
+migration and the asyncpg store against a live Postgres; both are
+gated on `ATELIER_TEST_DATABASE_URL` and skipped without it.
+
+```bash
+# Run integration tests locally (requires `docker compose up -d`).
+export ATELIER_TEST_DATABASE_URL=postgresql+asyncpg://atelier:atelier@localhost:5432/atelier
+pytest -m integration tests/integration
+```
 
 To run a quick lint + type check before pushing:
 
