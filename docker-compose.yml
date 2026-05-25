@@ -1,0 +1,30 @@
+# Local Postgres + pgvector for stratoclave-atelier development.
+#
+# Usage:
+#   docker compose up -d
+#   DATABASE_URL=postgresql+psycopg://atelier:atelier@localhost:5432/atelier \
+#     alembic upgrade head
+#
+# The pgvector image already provides the `vector` extension; the first
+# migration (0001_initial_schema) runs CREATE EXTENSION on it so a fresh
+# volume is bootstrapped with no manual steps.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: atelier
+      POSTGRES_PASSWORD: atelier
+      POSTGRES_DB: atelier
+    ports:
+      - "5432:5432"
+    volumes:
+      - atelier-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atelier -d atelier"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  atelier-pgdata:
