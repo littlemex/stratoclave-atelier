@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 SessionStatus = Literal["active", "frozen", "archived"]
+EventKind = Literal["turn", "freeze", "fork", "system"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,3 +71,21 @@ class Version:
     byte_size: int
     label: str | None
     frozen_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class Event:
+    """A single entry in a session's monotonic event log.
+
+    ``seq`` is unique per session and monotonically increasing. ``kind``
+    distinguishes turn appends from control events (freeze / fork). The
+    JSONL turn payload is stored as-is in ``payload`` so SSE replay can
+    re-emit it without parsing.
+    """
+
+    event_id: UUID
+    session_id: UUID
+    seq: int
+    kind: EventKind
+    payload: dict[str, Any]
+    created_at: datetime

@@ -9,13 +9,13 @@
 
 | Stage | Scope | Status |
 |-------|-------|--------|
-| A     | Runnable skeleton: FastAPI app + 5-table schema + docker-compose + `/healthz` | In progress |
-| B     | Store layer (Protocol + InMemory + asyncpg), groups + sessions + versions REST | Not started |
+| A     | Runnable skeleton: FastAPI app + 5-table schema + docker-compose + `/healthz` | Done |
+| B     | Store layer (Protocol + InMemory + asyncpg), groups + sessions + versions REST | Done |
 | C     | JSONL ingest (WebSocket + SSE), per-turn freeze button backend, blob store | Not started |
 | D     | Cross-session snapshot RPC, fork DAG JSON, distill / loom integration | Not started |
 | E     | UI (fork DAG visualization + per-turn freeze buttons) | Not started |
 
-### What ships in Stage A (this commit)
+### What ships in Stage A
 
 | Component | File(s) | State |
 |-----------|---------|-------|
@@ -30,6 +30,25 @@
 | 3 mandatory docs | `docs/{GETTING_STARTED,PROJECT_STATUS,PROJECT_RULES}.md` | Done |
 | CI workflow | `.github/workflows/ci.yml` | Done |
 | Unit tests | `tests/unit/` | Done |
+
+### What ships in Stage B (this delta)
+
+| Component | File(s) | State |
+|-----------|---------|-------|
+| `Store` Protocol | `src/stratoclave_atelier/db/store.py` | Done |
+| `InMemoryStore` (test backend) | `src/stratoclave_atelier/db/memory.py` | Done |
+| `AsyncpgStore` (runtime backend, raw SQL via SQLAlchemy async) | `src/stratoclave_atelier/db/asyncpg_store.py` | Done |
+| Domain `Event` type + `EventKind` literal | `src/stratoclave_atelier/core/types.py` | Done |
+| `ConflictError` for invariant violations | `src/stratoclave_atelier/core/errors.py` | Done |
+| FastAPI lifespan: build engine + AsyncpgStore on startup, dispose on shutdown | `src/stratoclave_atelier/server.py` | Done |
+| Pydantic 2 request/response schemas | `src/stratoclave_atelier/api/schemas.py` | Done |
+| `StoreDep` DI alias + 404 / 409 helpers | `src/stratoclave_atelier/api/deps.py` | Done |
+| `POST/GET /api/groups`, `GET /api/groups/{id}` | `src/stratoclave_atelier/api/groups.py` | Done |
+| `POST/GET /api/sessions`, `GET /api/sessions/{id}`, `POST /api/sessions/{id}/fork`, `GET /api/sessions/{id}/versions` | `src/stratoclave_atelier/api/sessions.py` | Done |
+| Unit tests for `InMemoryStore` (14 tests) | `tests/unit/test_memory_store.py` | Done |
+| Unit tests for `/api/groups` + `/api/sessions` | `tests/unit/test_api_groups.py`, `tests/unit/test_api_sessions.py` | Done |
+| Integration tests for `AsyncpgStore` (gated on `ATELIER_TEST_DATABASE_URL`) | `tests/integration/test_asyncpg_store.py` | Done |
+| CI: integration job against pgvector service container | `.github/workflows/ci.yml` | Done |
 
 ### Database schema
 
@@ -101,12 +120,15 @@ These were excluded by explicit project decision (see `HANDOVER.md`):
 
 | Role    | Owner    | Status   | Current task                   |
 |---------|----------|----------|--------------------------------|
-| Backend | (lead)   | Active   | Stage A skeleton bootstrap     |
+| Backend | (lead)   | Active   | Stage C: ingest + freeze + blob store |
 | UI      | -        | Pending  | Awaits Stage D handoff         |
 
 ## Next steps (priority order)
 
-1. **Push Stage A** initial commit via the S3+server procedure.
-2. **Verify CI green** on the `main` branch (ruff + mypy + pytest).
-3. **Begin Stage B**: `Store` Protocol + `InMemoryStore` first, then
-   `AsyncpgStore`, then the groups / sessions REST endpoints.
+1. **Begin Stage C**: content-addressed blob store under
+   `ATELIER_BLOB_DIR`, write-once with `chmod 0444` after rename.
+2. **WebSocket ingest** that appends turns to a session's event log and
+   spools the JSONL to a temp file.
+3. **Freeze endpoints**: `POST /api/sessions/{id}/freeze` (whole) and
+   per-turn / range freeze backed by the blob store.
+4. **SSE replay**: `GET /api/sessions/{id}/events?from_seq=N`.

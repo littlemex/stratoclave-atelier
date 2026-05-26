@@ -45,7 +45,7 @@ jobs:
         run: bash scripts/check-no-hardcoded-secrets.sh
 
       - name: Unit tests
-        run: pytest -q --cov=stratoclave_atelier --cov-report=term-missing
+        run: pytest -q -m "not integration" --cov=stratoclave_atelier --cov-report=term-missing
 
   integration:
     runs-on: ubuntu-latest

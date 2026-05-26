@@ -23,3 +23,12 @@ class SchemaError(AtelierError):
 
 class NotFoundError(AtelierError):
     """Raised when a requested entity (group / session / version) is absent."""
+
+
+class ConflictError(AtelierError):
+    """Raised when a write violates a domain invariant.
+
+    Examples: forking from a version whose ``session_id`` does not match
+    the parent referenced by the new session, or inserting an event with
+    a non-monotonic ``seq``.
+    """

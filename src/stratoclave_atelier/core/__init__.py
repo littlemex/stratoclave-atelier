@@ -3,10 +3,13 @@
 from stratoclave_atelier.core.errors import (
     AtelierError,
     ConfigError,
+    ConflictError,
     NotFoundError,
     SchemaError,
 )
 from stratoclave_atelier.core.types import (
+    Event,
+    EventKind,
     Group,
     Session,
     SessionStatus,
@@ -16,6 +19,9 @@ from stratoclave_atelier.core.types import (
 __all__ = [
     "AtelierError",
     "ConfigError",
+    "ConflictError",
+    "Event",
+    "EventKind",
     "Group",
     "NotFoundError",
     "SchemaError",
