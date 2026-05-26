@@ -45,14 +45,11 @@ dependencies = [
     "httpx>=0.27",
     # Stage C ingest endpoint relies on websockets being installed.
     "websockets>=12",
-    # Stage G: agent runs are delegated to stratoclave-loom (claude_code adapter).
-    "stratoclave-loom>=0.1.0.dev0",
 ]
 
 [project.optional-dependencies]
 memory = [
     # Stage G: distill provides ingest-on-freeze + retrieve-on-run + snapshot resolver.
-    "stratoclave-distill>=0.1.0.dev0",
 ]
 dev = [
     "pytest>=8.0",
