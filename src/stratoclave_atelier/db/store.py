@@ -55,6 +55,7 @@ class Store(Protocol):
         parent_session_id: UUID | None = None,
         parent_version_id: UUID | None = None,
         fork_seq: int | None = None,
+        agent_backend: str | None = None,
     ) -> Session: ...
 
     async def get_session(self, session_id: UUID) -> Session: ...

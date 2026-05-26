@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from stratoclave_atelier import __version__
 from stratoclave_atelier.agent_runner import AgentRunner
 from stratoclave_atelier.api import (
+    agent_router,
     agent_runs_router,
     events_router,
     fork_graph_router,
@@ -112,6 +113,7 @@ def create_app(
     app.include_router(fork_graph_router)
     app.include_router(snapshot_queries_router)
     app.include_router(agent_runs_router)
+    app.include_router(agent_router)
     _mount_frontend(app)
     return app
 

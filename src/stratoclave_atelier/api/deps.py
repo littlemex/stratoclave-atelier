@@ -14,6 +14,7 @@ from typing import Annotated, cast
 from fastapi import Depends, HTTPException, Request, status
 
 from stratoclave_atelier.blobs import BlobStore
+from stratoclave_atelier.config import AtelierConfig
 from stratoclave_atelier.core import ConflictError, NotFoundError
 from stratoclave_atelier.db import Store
 from stratoclave_atelier.events_bus import EventBus
@@ -101,11 +102,24 @@ def get_memory_service(request: Request) -> MemoryService:
     return cast(MemoryService, memory)
 
 
+def get_config(request: Request) -> AtelierConfig:
+    """Return the :class:`AtelierConfig` attached to the FastAPI app."""
+
+    cfg = getattr(request.app.state, "config", None)
+    if cfg is None:  # pragma: no cover -- developer error if hit
+        raise RuntimeError(
+            "AtelierConfig is not configured on app.state.config; "
+            "build the app via create_app() with a config"
+        )
+    return cast(AtelierConfig, cfg)
+
+
 StoreDep = Annotated[Store, Depends(get_store)]
 BlobStoreDep = Annotated[BlobStore, Depends(get_blob_store)]
 SnapshotResolverDep = Annotated[SnapshotResolver, Depends(get_snapshot_resolver)]
 EventBusDep = Annotated[EventBus, Depends(get_event_bus)]
 MemoryServiceDep = Annotated[MemoryService, Depends(get_memory_service)]
+ConfigDep = Annotated[AtelierConfig, Depends(get_config)]
 
 
 def http_not_found(error: NotFoundError) -> HTTPException:

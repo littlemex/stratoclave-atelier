@@ -102,6 +102,12 @@ class AsyncpgStore(Store):
         return [_row_to_group(r) for r in rows]
 
     # sessions ---------------------------------------------------------------
+    _SESSION_COLUMNS = (
+        "session_id, group_id, title,"
+        " parent_session_id, parent_version_id, fork_seq,"
+        " status, created_at, updated_at, agent_backend"
+    )
+
     async def create_session(
         self,
         *,
@@ -110,8 +116,15 @@ class AsyncpgStore(Store):
         parent_session_id: UUID | None = None,
         parent_version_id: UUID | None = None,
         fork_seq: int | None = None,
+        agent_backend: str | None = None,
     ) -> Session:
         await self._validate_fork(parent_session_id, parent_version_id, fork_seq)
+
+        # Forks inherit the parent's backend by default to keep
+        # mid-conversation forks on the same engine.
+        if agent_backend is None and parent_session_id is not None:
+            parent = await self.get_session(parent_session_id)
+            agent_backend = parent.agent_backend
 
         session_id = uuid4()
         async with self._engine.begin() as conn:
@@ -121,11 +134,10 @@ class AsyncpgStore(Store):
                         text(
                             "INSERT INTO sessions ("
                             " session_id, group_id, title,"
-                            " parent_session_id, parent_version_id, fork_seq"
-                            ") VALUES (:sid, :gid, :title, :psid, :pvid, :fseq) "
-                            "RETURNING session_id, group_id, title,"
                             " parent_session_id, parent_version_id, fork_seq,"
-                            " status, created_at, updated_at"
+                            " agent_backend"
+                            ") VALUES (:sid, :gid, :title, :psid, :pvid, :fseq, :ab) "
+                            f"RETURNING {self._SESSION_COLUMNS}"
                         ),
                         {
                             "sid": session_id,
@@ -134,6 +146,7 @@ class AsyncpgStore(Store):
                             "psid": parent_session_id,
                             "pvid": parent_version_id,
                             "fseq": fork_seq,
+                            "ab": agent_backend,
                         },
                     )
                 ).one()
@@ -146,12 +159,7 @@ class AsyncpgStore(Store):
         async with self._engine.connect() as conn:
             row = (
                 await conn.execute(
-                    text(
-                        "SELECT session_id, group_id, title,"
-                        " parent_session_id, parent_version_id, fork_seq,"
-                        " status, created_at, updated_at "
-                        "FROM sessions WHERE session_id = :sid"
-                    ),
+                    text(f"SELECT {self._SESSION_COLUMNS} FROM sessions WHERE session_id = :sid"),
                     {"sid": session_id},
                 )
             ).one_or_none()
@@ -160,12 +168,7 @@ class AsyncpgStore(Store):
         return _row_to_session(row)
 
     async def list_sessions(self, *, group_id: UUID | None = None) -> list[Session]:
-        sql = (
-            "SELECT session_id, group_id, title,"
-            " parent_session_id, parent_version_id, fork_seq,"
-            " status, created_at, updated_at "
-            "FROM sessions"
-        )
+        sql = f"SELECT {self._SESSION_COLUMNS} FROM sessions"
         params: dict[str, Any] = {}
         if group_id is not None:
             sql += " WHERE group_id = :gid"
@@ -182,9 +185,7 @@ class AsyncpgStore(Store):
                     text(
                         "UPDATE sessions SET status = :status, updated_at = now() "
                         "WHERE session_id = :sid "
-                        "RETURNING session_id, group_id, title,"
-                        " parent_session_id, parent_version_id, fork_seq,"
-                        " status, created_at, updated_at"
+                        f"RETURNING {self._SESSION_COLUMNS}"
                     ),
                     {"sid": session_id, "status": status},
                 )
@@ -474,6 +475,7 @@ def _row_to_session(row: Any) -> Session:
         status=row.status,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        agent_backend=getattr(row, "agent_backend", None),
     )
 
 

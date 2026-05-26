@@ -64,18 +64,54 @@ class AgentRunner:
 
     @property
     def enabled(self) -> bool:
-        return self._config.agent_backend != "none"
+        """``True`` when at least one backend is wired into this server.
 
-    async def _ensure_session(self, session_id: UUID) -> AgentSession:
+        Stage G used the singular ``agent_backend != 'none'`` test;
+        Stage H widens that to "any backend in the allowed list", so
+        deployments that only set ``ATELIER_AGENT_BACKENDS_ALLOWED``
+        still report enabled even when ``agent_backend`` is ``'none'``.
+        """
+
+        return self._config.agent_backend != "none" or bool(self._config.resolved_backends())
+
+    def _resolve_backend_for(self, requested: str | None) -> str:
+        """Pick the backend a session should run against.
+
+        Falls back to ``agent_backend`` (Stage G default) when the
+        session does not specify one. Raises :class:`RuntimeError` when
+        nothing is configured -- the API layer surfaces that as 503.
+        """
+
+        if requested:
+            return requested
+        if self._config.agent_backend != "none":
+            return self._config.agent_backend
+        allowed = self._config.resolved_backends()
+        if len(allowed) == 1:
+            return allowed[0]
+        raise RuntimeError(
+            "no default agent backend; "
+            "set ATELIER_AGENT_BACKEND or pass agent_backend on session creation"
+        )
+
+    async def _ensure_session(
+        self, session_id: UUID, *, backend: str | None = None
+    ) -> AgentSession:
         async with self._lock:
             existing = self._sessions.get(session_id)
             if existing is not None:
                 return existing
-            assert self._config.agent_cwd is not None  # validated by AtelierConfig
+            backend_name = self._resolve_backend_for(backend)
+            cwd = self._config.cwd_for_backend(backend_name)
+            if not cwd:
+                raise RuntimeError(
+                    f"agent_cwd is not configured for backend {backend_name!r}; "
+                    f"set ATELIER_AGENT_CWD_{backend_name.upper()} or ATELIER_AGENT_CWD"
+                )
             cfg = BackendConfig(
-                backend=self._config.agent_backend,
-                cwd=self._config.agent_cwd,
-                allowed_tools=self._config.agent_allowed_tools or None,
+                backend=backend_name,
+                cwd=cwd,
+                allowed_tools=self._config.allowed_tools_for_backend(backend_name) or None,
             )
             session = create_session(cfg, session_id=str(session_id))
             self._sessions[session_id] = session
@@ -87,6 +123,7 @@ class AgentRunner:
         session_id: UUID,
         prompt: str,
         memory_context: str | None = None,
+        backend: str | None = None,
     ) -> None:
         """Send ``prompt`` to the agent and stream chunks into the event log.
 
@@ -94,7 +131,9 @@ class AgentRunner:
         the SPA shows a "Memory: N items" badge based on the count
         encoded in the inbound user-turn payload. Errors raised by the
         backend are persisted as ``agent_error`` events and surfaced to
-        the caller.
+        the caller. ``backend`` overrides the server-default loom
+        backend at session-warmup time (Stage H per-session selection);
+        once a session is warm the choice is sticky.
         """
 
         if not self.enabled:
@@ -103,7 +142,7 @@ class AgentRunner:
                 f"(current={self._config.agent_backend!r})"
             )
 
-        session = await self._ensure_session(session_id)
+        session = await self._ensure_session(session_id, backend=backend)
 
         # Memory retrieval is best-effort and never blocks the run: any
         # failure inside the memory service is logged and swallowed.
@@ -160,6 +199,7 @@ class AgentRunner:
         session_id: UUID,
         prompt: str,
         memory_context: str | None = None,
+        backend: str | None = None,
     ) -> asyncio.Task[None]:
         """Fire-and-forget wrapper around :meth:`run` that retains the task."""
 
@@ -168,6 +208,7 @@ class AgentRunner:
                 session_id=session_id,
                 prompt=prompt,
                 memory_context=memory_context,
+                backend=backend,
             )
         )
         self._tasks.add(task)

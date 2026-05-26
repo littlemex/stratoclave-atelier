@@ -60,6 +60,14 @@ class GroupRead(BaseModel):
 class SessionCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     group_id: UUID | None = None
+    agent_backend: str | None = Field(
+        default=None,
+        description=(
+            "Loom backend to use for this session "
+            "(claude_code / kiro_code / mock). "
+            "When omitted the server falls back to its default backend."
+        ),
+    )
 
 
 class SessionRead(BaseModel):
@@ -72,6 +80,7 @@ class SessionRead(BaseModel):
     status: SessionStatus
     created_at: datetime
     updated_at: datetime
+    agent_backend: str | None = None
 
     @classmethod
     def from_domain(cls, session: Session) -> SessionRead:
@@ -85,6 +94,7 @@ class SessionRead(BaseModel):
             status=session.status,
             created_at=session.created_at,
             updated_at=session.updated_at,
+            agent_backend=session.agent_backend,
         )
 
 
@@ -100,6 +110,13 @@ class SessionFork(BaseModel):
     parent_version_id: UUID
     fork_seq: int = Field(..., ge=0)
     group_id: UUID | None = None
+    agent_backend: str | None = Field(
+        default=None,
+        description=(
+            "Override the parent session's backend for this fork. "
+            "Defaults to inheriting the parent's backend."
+        ),
+    )
 
 
 # Versions ---------------------------------------------------------------------

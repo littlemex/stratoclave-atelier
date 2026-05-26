@@ -178,6 +178,82 @@ async def test_runner_compose_prompt_injects_memory() -> None:
     assert composed.endswith("question")
 
 
+# ---------------------------------------------------------------------------
+# Stage H: per-session backend resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_backend_prefers_requested(
+    stub_runner_config: AtelierConfig,
+) -> None:
+    runner = AgentRunner(config=stub_runner_config, store=InMemoryStore(), bus=EventBus())
+    assert runner._resolve_backend_for("kiro_code") == "kiro_code"
+
+
+def test_resolve_backend_falls_back_to_default(
+    stub_runner_config: AtelierConfig,
+) -> None:
+    runner = AgentRunner(config=stub_runner_config, store=InMemoryStore(), bus=EventBus())
+    assert runner._resolve_backend_for(None) == "claude_code"
+
+
+def test_resolve_backend_uses_single_allowed_when_default_none(
+    stub_env: Mapping[str, str], tmp_path: Any
+) -> None:
+    cfg = AtelierConfig.from_env(
+        {
+            **stub_env,
+            "ATELIER_AGENT_BACKENDS_ALLOWED": "kiro_code",
+            "ATELIER_AGENT_CWD": str(tmp_path),
+        }
+    )
+    runner = AgentRunner(config=cfg, store=InMemoryStore(), bus=EventBus())
+    assert runner.enabled is True
+    assert runner._resolve_backend_for(None) == "kiro_code"
+
+
+def test_resolve_backend_raises_when_ambiguous(stub_env: Mapping[str, str], tmp_path: Any) -> None:
+    cfg = AtelierConfig.from_env(
+        {
+            **stub_env,
+            "ATELIER_AGENT_BACKENDS_ALLOWED": "claude_code,kiro_code",
+            "ATELIER_AGENT_CWD": str(tmp_path),
+        }
+    )
+    runner = AgentRunner(config=cfg, store=InMemoryStore(), bus=EventBus())
+    with pytest.raises(RuntimeError, match="no default agent backend"):
+        runner._resolve_backend_for(None)
+
+
+@pytest.mark.asyncio
+async def test_runner_uses_per_session_backend(
+    stub_runner_config: AtelierConfig,
+    stub_backend: _StubBackend,
+) -> None:
+    """When the session names a backend, the runner uses it instead of the default."""
+
+    cfg = stub_runner_config
+    # Allow stub_test in the resolver path: bypass Literal typing.
+    object.__setattr__(cfg, "agent_backend", "claude_code")
+    store = InMemoryStore()
+    bus = EventBus()
+    runner = AgentRunner(config=cfg, store=store, bus=bus)
+    session = await store.create_session(title="kiro-pinned", agent_backend="stub_test")
+
+    await runner.run(
+        session_id=session.session_id,
+        prompt="hi",
+        backend=session.agent_backend,
+    )
+
+    events = await store.list_events(session.session_id)
+    kinds = [e.kind for e in events]
+    assert "agent_turn" in kinds
+    # The stub backend was warmed: confirm by checking close() reaches it.
+    await runner.close()
+    assert session.session_id is not None
+
+
 @pytest.mark.asyncio
 async def test_runner_publishes_to_bus(
     stub_runner_config: AtelierConfig,

@@ -46,6 +46,11 @@ class Session:
     A session forked from another inherits turns ``[0, fork_seq]`` from
     the parent's frozen version; subsequent turns are appended only to
     this session.
+
+    ``agent_backend`` records the loom backend chosen at session
+    creation time (Stage H). ``None`` means "use the server-default
+    backend"; Stage G sessions persisted before the migration are
+    therefore handled transparently.
     """
 
     session_id: UUID
@@ -57,6 +62,7 @@ class Session:
     status: SessionStatus
     created_at: datetime
     updated_at: datetime
+    agent_backend: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

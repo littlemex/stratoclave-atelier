@@ -80,7 +80,13 @@ async def create_agent_run(
     # Fire-and-forget: the SPA listens to the SSE stream for chunks. The
     # task is kept on the runner so the event loop holds a strong
     # reference and Python doesn't garbage-collect it mid-flight.
-    runner.schedule(session_id=session_id, prompt=payload.prompt)
+    # Pass the per-session backend (Stage H); the runner falls back to
+    # the server-default when ``session.agent_backend is None``.
+    runner.schedule(
+        session_id=session_id,
+        prompt=payload.prompt,
+        backend=session.agent_backend,
+    )
     return AgentRunRead(session_id=session_id)
 
 
