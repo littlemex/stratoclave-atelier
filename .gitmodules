@@ -1,0 +1,3 @@
+[submodule "vendor/stratoclave-loom"]
+	path = vendor/stratoclave-loom
+	url = https://github.com/littlemex/stratoclave-loom.git
