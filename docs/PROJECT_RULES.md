@@ -1,6 +1,6 @@
 # stratoclave-atelier: Project Rules
 
-**Last updated**: 2026-05-25
+**Last updated**: 2026-05-27
 
 These are the rules that apply to this repository specifically. They
 exist on top of the more general 4-OSS series conventions and the

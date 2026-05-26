@@ -23,12 +23,16 @@ conversation, not an audit trail.
 from __future__ import annotations
 
 import json
+import logging
 from uuid import UUID
 
 from stratoclave_atelier.blobs import BlobStore
 from stratoclave_atelier.core import ConflictError
 from stratoclave_atelier.core.types import Event, Version
 from stratoclave_atelier.db import Store
+from stratoclave_atelier.memory import MemoryService
+
+logger = logging.getLogger(__name__)
 
 
 def serialise_jsonl(events: list[Event]) -> bytes:
@@ -60,6 +64,7 @@ async def freeze_session(
     start_seq: int | None = None,
     end_seq: int | None = None,
     label: str | None = None,
+    memory: MemoryService | None = None,
 ) -> Version:
     """Freeze a session range into an immutable :class:`Version`.
 
@@ -68,6 +73,12 @@ async def freeze_session(
     session does not exist (propagated from
     :meth:`Store.list_events`), and :class:`ConflictError` if the
     requested range contains no turn events.
+
+    When ``memory`` is enabled, the selected turn events are also handed
+    to the memory service for cross-session learning extraction.
+    Failures inside the memory pipeline are logged and never block the
+    freeze itself: a frozen Version on disk takes priority over an
+    extra learning row that did not land.
     """
 
     all_events = await store.list_events(session_id)
@@ -88,7 +99,7 @@ async def freeze_session(
 
     payload = serialise_jsonl(selected)
     write = await blob_store.write(payload)
-    return await store.create_version(
+    version = await store.create_version(
         session_id=session_id,
         blob_sha=write.sha256,
         blob_path=write.path,
@@ -97,3 +108,11 @@ async def freeze_session(
         byte_size=write.byte_size,
         label=label,
     )
+
+    if memory is not None and memory.enabled:
+        try:
+            await memory.ingest_session(session_id=session_id, events=selected)
+        except Exception:
+            logger.exception("memory ingest failed for session %s", session_id)
+
+    return version

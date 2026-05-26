@@ -133,6 +133,23 @@ class VersionRead(BaseModel):
         )
 
 
+# Turns (HTTP append, alternative to WS ingest) -------------------------------
+
+
+class TurnAppend(BaseModel):
+    """Append a single turn to a session via HTTP.
+
+    Stage F adds this fallback so the CLI ``session send-turn`` can drive
+    a session without opening a WebSocket. The persisted state is
+    identical to what the ``/ingest`` socket would produce: one row in
+    ``events`` with ``kind="turn"`` and a payload mirroring the JSONL
+    line.
+    """
+
+    role: str = Field(..., min_length=1, max_length=64)
+    content: str = Field(..., max_length=200_000)
+
+
 # Freeze -----------------------------------------------------------------------
 
 

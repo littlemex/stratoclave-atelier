@@ -1,6 +1,6 @@
 # stratoclave-atelier: Implementation Status
 
-**Last updated**: 2026-05-26
+**Last updated**: 2026-05-27 (Stage G)
 **Project started**: 2026-05-25
 
 ## Overall progress
@@ -14,6 +14,8 @@
 | C     | Content-addressed BlobStore, WebSocket ingest, freeze (whole + range), SSE replay | Done |
 | D     | Fork-graph JSON + cross-session snapshot RPC + Echo resolver | Done |
 | E     | Vanilla JS SPA (4 panels) + static mount + `--in-memory` CLI + walking-skeleton E2E | Done |
+| F     | Per-turn freeze UI + fork dialog + snapshot-query dialog + live-tail SSE + HTTP turn fallback + CLI session subcommands | Done |
+| G     | Real agent loop via stratoclave-loom + cross-session memory via stratoclave-distill + claude-capture-style chat at `/` + legacy panels moved to `/panels` | Done |
 
 ### What ships in Stage A
 
@@ -31,7 +33,42 @@
 | CI workflow | `.github/workflows/ci.yml` | Done |
 | Unit tests | `tests/unit/` | Done |
 
-### What ships in Stages D + E (this delta)
+### What ships in Stage G (this delta)
+
+| Component | File(s) | State |
+|-----------|---------|-------|
+| `AgentRunner` (one loom `AgentSession` per atelier session, streaming + persistence + cancellation) | `src/stratoclave_atelier/agent_runner.py` | Done |
+| `EventBus` (asyncio.Queue pub-sub for SSE live broadcast + backpressure resync) | `src/stratoclave_atelier/events_bus.py` | Done |
+| `POST /api/sessions/{id}/agent-runs` (202 + fire-and-forget, SSE drives the response) and `/cancel` (204) | `src/stratoclave_atelier/api/agent_runs.py` | Done |
+| SSE endpoint switched to live broadcast (`follow=true`) with 15 s `: ping` keepalive and replay-then-tail dedupe | `src/stratoclave_atelier/api/events.py` | Done |
+| `MemoryService` Protocol + `NoopMemoryService` + async `build_memory_service` | `src/stratoclave_atelier/memory.py` | Done |
+| `DistillMemoryService` (lazy-imported, owns asyncpg pool + IngestRunner + Retriever) | `src/stratoclave_atelier/_distill_memory.py` | Done |
+| `freeze_session` calls `memory.ingest_session(events=selected)` post-Version | `src/stratoclave_atelier/freeze.py` | Done |
+| `MemoryServiceDep` DI alias + freeze handler wiring | `src/stratoclave_atelier/api/deps.py`, `api/sessions.py` | Done |
+| FastAPI lifespan: `await build_memory_service(cfg)` + `await memory.aclose()` | `src/stratoclave_atelier/server.py` | Done |
+| Stage G chat at `/` (vanilla ES module, claude-capture style) | `frontend/static/index.html`, `frontend/static/js/chat.js`, `frontend/static/css/chat.css` | Done |
+| Stage B-F 4-panel SPA moved to `/panels` (URL preserved for power users) | `frontend/static/panels/` | Done |
+| Config knobs: `ATELIER_AGENT_BACKEND`, `ATELIER_AGENT_CWD`, `ATELIER_AGENT_ALLOWED_TOOLS`, `ATELIER_AGENT_MEMORY`, `ATELIER_DISTILL_ENABLED`, `ATELIER_DISTILL_DATABASE_URL` | `src/stratoclave_atelier/config.py` | Done |
+| `[memory]` optional extra: `stratoclave-distill` + `asyncpg` | `pyproject.toml` | Done |
+| Unit tests (Stage G adds `test_agent_runner.py`, `test_api_agent_runs.py`, `test_events_bus.py`, `test_memory.py`; expands `test_api_events.py`, `test_frontend_mount.py`) | `tests/unit/` | Done |
+| Walkthrough doc | `docs/STAGE_G_WALKTHROUGH.md` | Done |
+
+### What ships in Stage F
+
+| Component | File(s) | State |
+|-----------|---------|-------|
+| Per-turn freeze UI (`Freeze through` button + shift-click range anchor) | `frontend/static/index.html`, `frontend/static/css/app.css`, `frontend/static/js/app.js` | Done |
+| Fork dialog (`<dialog id="dialog-fork">` + `submitForkDialog`) | `frontend/static/index.html`, `frontend/static/js/app.js` | Done |
+| Snapshot-query dialog (`<dialog id="dialog-snapshot">` + `submitSnapshotDialog`) | `frontend/static/index.html`, `frontend/static/js/app.js` | Done |
+| Live-tail SSE (`EventSource` + `mergeIncomingEvent`) | `frontend/static/js/app.js::openLiveTail` | Done |
+| `POST /api/sessions/{id}/turns` (HTTP turn append, fallback to WS ingest) | `src/stratoclave_atelier/api/sessions.py::append_turn`, `api/schemas.py::TurnAppend` | Done |
+| `--in-memory` placeholder DB URL so `serve --in-memory` runs without `ATELIER_DATABASE_URL` | `src/stratoclave_atelier/cli.py::_cmd_serve` | Done |
+| CLI `session` subcommands (`list` / `show` / `send-turn` / `freeze` / `fork` / `snapshot-query`) | `src/stratoclave_atelier/cli.py` | Done |
+| `httpx` and `websockets` promoted to runtime deps | `pyproject.toml` | Done |
+| Unit tests (CLI subcommands + HTTP turn append + frozen-session 409) | `tests/unit/test_cli.py`, `tests/unit/test_api_sessions.py` | Done |
+| Walkthrough doc | `docs/STAGE_F_WALKTHROUGH.md` | Done |
+
+### What ships in Stages D + E (Stage D + E delta)
 
 | Component | File(s) | State |
 |-----------|---------|-------|
@@ -152,20 +189,20 @@ These were excluded by explicit project decision (see `HANDOVER.md`):
 
 | Role    | Owner    | Status   | Current task                   |
 |---------|----------|----------|--------------------------------|
-| Backend | (lead)   | Active   | Stage D + E: docs + push via S3+EC2 |
-| UI      | (lead)   | Active   | Walking-skeleton SPA shipped; awaiting per-turn freeze + auth |
+| Backend | (lead)   | Active   | Stage G shipped: AgentRunner + SSE live broadcast + MemoryService; push pending |
+| UI      | (lead)   | Active   | Stage G shipped: chat at `/`, panels at `/panels`; auth still pending |
 
 ## Next steps (priority order)
 
-1. **Live-tail SSE in the SPA**: convert `loadTimeline` from one-shot
-   fetch to `EventSource`, plumbing `Last-Event-ID` for resume.
-2. **Per-turn freeze button**: shift+click on a turn row triggers
-   `POST /api/sessions/{id}/freeze` with an explicit `start_seq` and
-   `end_seq`; render the resulting Version next to the timeline row.
-3. **stratoclave-distill integration**: replace `EchoSnapshotResolver`
-   with a real distill-backed resolver so snapshot-query can answer
-   semantic questions.
-4. **stratoclave-loom integration**: "spawn an agent on this version"
-   button next to each frozen Version row.
-5. **Auth wiring**: bearer token / Cognito mode end-to-end through the
+1. **`DistillSnapshotResolver`**: replace `EchoSnapshotResolver` with a
+   real distill-backed resolver so snapshot-query can answer semantic
+   questions (currently echoes the question back).
+2. **CLI `session tail`**: subscribe to the SSE stream and stream JSON
+   events to stdout, mirroring the SPA's live tail.
+3. **Loom "spawn on version"**: add a button on each frozen Version row
+   to start a new chat seeded with that JSONL.
+4. **Auth wiring**: bearer token / Cognito mode end-to-end through the
    SPA (currently relies on `ATELIER_AUTH_MODE=none`).
+5. **Memory ingestion observability**: surface failed
+   `memory.ingest_session` attempts in the panels UI (currently
+   logged-only).

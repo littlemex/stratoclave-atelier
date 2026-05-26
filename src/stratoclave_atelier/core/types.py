@@ -15,7 +15,16 @@ from typing import Any, Literal
 from uuid import UUID
 
 SessionStatus = Literal["active", "frozen", "archived"]
-EventKind = Literal["turn", "freeze", "fork", "system"]
+EventKind = Literal[
+    "turn",
+    "freeze",
+    "fork",
+    "system",
+    # Stage G: agent runs persist their stream to the same event log.
+    "agent_chunk",
+    "agent_turn",
+    "agent_error",
+]
 
 
 @dataclass(frozen=True, slots=True)

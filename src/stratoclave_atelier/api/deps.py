@@ -16,6 +16,8 @@ from fastapi import Depends, HTTPException, Request, status
 from stratoclave_atelier.blobs import BlobStore
 from stratoclave_atelier.core import ConflictError, NotFoundError
 from stratoclave_atelier.db import Store
+from stratoclave_atelier.events_bus import EventBus
+from stratoclave_atelier.memory import MemoryService
 from stratoclave_atelier.snapshot_resolver import SnapshotResolver
 
 
@@ -65,9 +67,45 @@ def get_snapshot_resolver(request: Request) -> SnapshotResolver:
     return cast(SnapshotResolver, resolver)
 
 
+def get_event_bus(request: Request) -> EventBus:
+    """Return the :class:`EventBus` attached to the FastAPI app.
+
+    Stage G adds a process-local bus for SSE live broadcast. Routers
+    that append events should publish to the bus so subscribers receive
+    them in real time.
+    """
+
+    bus = getattr(request.app.state, "event_bus", None)
+    if bus is None:  # pragma: no cover -- developer error if hit
+        raise RuntimeError(
+            "EventBus is not configured on app.state.event_bus; "
+            "build the app via create_app() so the lifespan can attach one"
+        )
+    return cast(EventBus, bus)
+
+
+def get_memory_service(request: Request) -> MemoryService:
+    """Return the :class:`MemoryService` attached to the FastAPI app.
+
+    Stage G-4 adds the cross-session memory layer. The default
+    :class:`NoopMemoryService` is wired when distill is disabled, so
+    handlers can always depend on a non-None object.
+    """
+
+    memory = getattr(request.app.state, "memory_service", None)
+    if memory is None:  # pragma: no cover -- developer error if hit
+        raise RuntimeError(
+            "MemoryService is not configured on app.state.memory_service; "
+            "build the app via create_app() so the lifespan can attach one"
+        )
+    return cast(MemoryService, memory)
+
+
 StoreDep = Annotated[Store, Depends(get_store)]
 BlobStoreDep = Annotated[BlobStore, Depends(get_blob_store)]
 SnapshotResolverDep = Annotated[SnapshotResolver, Depends(get_snapshot_resolver)]
+EventBusDep = Annotated[EventBus, Depends(get_event_bus)]
+MemoryServiceDep = Annotated[MemoryService, Depends(get_memory_service)]
 
 
 def http_not_found(error: NotFoundError) -> HTTPException:

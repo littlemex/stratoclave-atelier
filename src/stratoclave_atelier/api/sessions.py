@@ -24,15 +24,19 @@ from fastapi import APIRouter, Query, status
 
 from stratoclave_atelier.api.deps import (
     BlobStoreDep,
+    EventBusDep,
+    MemoryServiceDep,
     StoreDep,
     http_conflict,
     http_not_found,
 )
 from stratoclave_atelier.api.schemas import (
+    EventRead,
     SessionCreate,
     SessionFork,
     SessionFreeze,
     SessionRead,
+    TurnAppend,
     VersionRead,
 )
 from stratoclave_atelier.core import ConflictError, NotFoundError
@@ -107,6 +111,40 @@ async def list_versions(session_id: UUID, store: StoreDep) -> list[VersionRead]:
 
 
 @router.post(
+    "/{session_id}/turns",
+    response_model=EventRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def append_turn(
+    session_id: UUID,
+    payload: TurnAppend,
+    store: StoreDep,
+    bus: EventBusDep,
+) -> EventRead:
+    """Append a single turn via HTTP (Stage F fallback to WS ingest).
+
+    Mirrors the WebSocket ingest path: validates the session exists and
+    is still ``active``, then persists a single ``events`` row with
+    ``kind="turn"`` and a payload that mirrors the JSONL line.
+    """
+
+    try:
+        session = await store.get_session(session_id)
+    except NotFoundError as exc:
+        raise http_not_found(exc) from exc
+    if session.status != "active":
+        raise http_conflict(ConflictError(f"session {session_id} is {session.status}, not active"))
+
+    event = await store.append_event(
+        session_id=session_id,
+        kind="turn",
+        payload={"kind": "turn", "role": payload.role, "content": payload.content},
+    )
+    await bus.publish(event)
+    return EventRead.from_domain(event)
+
+
+@router.post(
     "/{session_id}/freeze",
     response_model=VersionRead,
     status_code=status.HTTP_201_CREATED,
@@ -116,6 +154,7 @@ async def freeze(
     payload: SessionFreeze,
     store: StoreDep,
     blob_store: BlobStoreDep,
+    memory: MemoryServiceDep,
 ) -> VersionRead:
     """Freeze a turn range into an immutable Version.
 
@@ -132,6 +171,7 @@ async def freeze(
             start_seq=payload.start_seq,
             end_seq=payload.end_seq,
             label=payload.label,
+            memory=memory,
         )
     except NotFoundError as exc:
         raise http_not_found(exc) from exc
