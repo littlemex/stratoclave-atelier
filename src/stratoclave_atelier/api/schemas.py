@@ -18,9 +18,13 @@ from pydantic import BaseModel, Field
 from stratoclave_atelier.core import (
     Event,
     EventKind,
+    ForkGraphEdge,
+    ForkGraphNode,
+    ForkGraphVersion,
     Group,
     Session,
     SessionStatus,
+    SnapshotQuery,
     Version,
 )
 
@@ -168,3 +172,102 @@ class EventRead(BaseModel):
             payload=event.payload,
             created_at=event.created_at,
         )
+
+
+# Snapshot queries ------------------------------------------------------------
+
+
+class SnapshotQueryCreate(BaseModel):
+    """A cross-session question against a frozen :class:`Version`.
+
+    The handler resolves the question via the registered
+    :class:`SnapshotResolver`, persists both the query and the response,
+    and returns the audit row.
+    """
+
+    target_version_id: UUID
+    query: str = Field(..., min_length=1, max_length=4000)
+
+
+class SnapshotQueryRead(BaseModel):
+    query_id: UUID
+    source_session_id: UUID
+    target_version_id: UUID
+    query: str
+    response: str | None
+    created_at: datetime
+
+    @classmethod
+    def from_domain(cls, row: SnapshotQuery) -> SnapshotQueryRead:
+        return cls(
+            query_id=row.query_id,
+            source_session_id=row.source_session_id,
+            target_version_id=row.target_version_id,
+            query=row.query,
+            response=row.response,
+            created_at=row.created_at,
+        )
+
+
+# Fork graph ------------------------------------------------------------------
+
+
+class ForkGraphVersionRead(BaseModel):
+    version_id: UUID
+    label: str | None
+    start_seq: int
+    end_seq: int
+    turn_count: int
+
+    @classmethod
+    def from_domain(cls, v: ForkGraphVersion) -> ForkGraphVersionRead:
+        return cls(
+            version_id=v.version_id,
+            label=v.label,
+            start_seq=v.start_seq,
+            end_seq=v.end_seq,
+            turn_count=v.turn_count,
+        )
+
+
+class ForkGraphNodeRead(BaseModel):
+    session_id: UUID
+    title: str
+    status: SessionStatus
+    parent_session_id: UUID | None
+    parent_version_id: UUID | None
+    fork_seq: int | None
+    versions: list[ForkGraphVersionRead]
+
+    @classmethod
+    def from_domain(cls, node: ForkGraphNode) -> ForkGraphNodeRead:
+        return cls(
+            session_id=node.session_id,
+            title=node.title,
+            status=node.status,
+            parent_session_id=node.parent_session_id,
+            parent_version_id=node.parent_version_id,
+            fork_seq=node.fork_seq,
+            versions=[ForkGraphVersionRead.from_domain(v) for v in node.versions],
+        )
+
+
+class ForkGraphEdgeRead(BaseModel):
+    parent_session_id: UUID
+    child_session_id: UUID
+    via_version_id: UUID
+    fork_seq: int
+
+    @classmethod
+    def from_domain(cls, edge: ForkGraphEdge) -> ForkGraphEdgeRead:
+        return cls(
+            parent_session_id=edge.parent_session_id,
+            child_session_id=edge.child_session_id,
+            via_version_id=edge.via_version_id,
+            fork_seq=edge.fork_seq,
+        )
+
+
+class ForkGraphResponse(BaseModel):
+    nodes: list[ForkGraphNodeRead]
+    edges: list[ForkGraphEdgeRead]
