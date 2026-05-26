@@ -225,11 +225,19 @@ stratoclave-atelier session fork <parent_session_id> \
 # Run the cross-session snapshot RPC against a Version.
 stratoclave-atelier session snapshot-query <source_session_id> \
   --target-version-id <version_id> --query "what changed?"
+
+# Stage I: subscribe to a session's SSE stream and emit one JSON line
+# per event on stdout (mirrors the SPA's live tail).
+stratoclave-atelier session tail <session_id>
+stratoclave-atelier session tail <session_id> --from-seq 100 --no-follow \
+  > replay.jsonl
 ```
 
 Every subcommand emits the response body as pretty-printed JSON on
 stdout. Failures (HTTP >= 400) print `error: METHOD path -> status: detail`
-to stderr and exit with status 2.
+to stderr and exit with status 2. `session tail` is the exception:
+each event becomes one JSON line on stdout, suitable for piping into
+`jq -c .` or downstream processors.
 
 ## Stage G: chat at `/` and panels at `/panels`
 
@@ -395,8 +403,13 @@ mypy src/stratoclave_atelier
   (`AgentRunner` + loom), live SSE broadcast, the memory layer
   (`MemoryService` + distill ingest / retrieve), and the chat shell
   at `/`.
-- Remaining work is server-side: a real `DistillSnapshotResolver` to
-  replace `EchoSnapshotResolver`, a `session tail` CLI to mirror the
-  SPA's live tail, "spawn an agent on this version" buttons in the
-  panels, and end-to-end auth wiring. See "Next steps" in
-  `PROJECT_STATUS.md`.
+- Read `STAGE_H_WALKTHROUGH.md` for per-session backend selection
+  (claude_code / kiro_code / mock).
+- Read `STAGE_I_WALKTHROUGH.md` for the deep dive on the
+  `DistillSnapshotResolver` (real distill-backed snapshot answers,
+  swappable via `ATELIER_SNAPSHOT_RESOLVER=distill`) and the new
+  `session tail` CLI.
+- Remaining work is "spawn an agent on this version" buttons in the
+  panels, end-to-end auth wiring, panels-side memory ingestion
+  observability, and an optional LLM-backed snapshot resolver. See
+  "Next steps" in `PROJECT_STATUS.md`.

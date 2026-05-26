@@ -12,6 +12,8 @@ terminal:
 * ``session freeze``         -- freeze a turn range into a Version.
 * ``session fork``           -- fork a child session from a frozen Version.
 * ``session snapshot-query`` -- run the cross-session RPC against a Version.
+* ``session tail``           -- subscribe to the SSE event stream and print
+  one JSON event per line, mirroring what the chat shell does live.
 
 The ``--in-memory`` flag on ``serve`` no longer requires
 ``ATELIER_DATABASE_URL`` -- a placeholder is wired in if the variable is
@@ -118,6 +120,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="UUID of the Version being asked about.",
     )
     s_snap.add_argument("--query", required=True, help="The natural-language question.")
+
+    s_tail = sess_sub.add_parser(
+        "tail",
+        help="Stream the SSE event log for a session as one JSON line per event.",
+    )
+    s_tail.add_argument("session_id", help="Session UUID.")
+    s_tail.add_argument(
+        "--from-seq",
+        type=int,
+        default=0,
+        help="Replay starting at this seq (default 0).",
+    )
+    s_tail.add_argument(
+        "--no-follow",
+        action="store_true",
+        help="Drain history only, do not subscribe to live updates.",
+    )
 
     return parser
 
@@ -286,6 +305,63 @@ def _cmd_session_fork(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_session_tail(args: argparse.Namespace) -> int:
+    """Stream SSE events from ``/api/sessions/{id}/events`` to stdout.
+
+    Mirrors what the Stage F chat shell does in the browser: the SSE
+    framing is decoded line-by-line, ``: ping`` keepalives are dropped,
+    and each ``data:`` payload is re-emitted to stdout as a single JSON
+    line so the output is pipeable into ``jq`` or a downstream process.
+    Exits 0 on a clean stream end (history-only mode) or on Ctrl-C.
+    """
+
+    import httpx
+
+    base = _resolve_base_url(args)
+    follow = not args.no_follow
+    url = base.rstrip("/") + f"/api/sessions/{args.session_id}/events"
+    params = {"from_seq": args.from_seq, "follow": "true" if follow else "false"}
+
+    timeout = httpx.Timeout(10.0, read=None)
+    try:
+        with (
+            httpx.Client(timeout=timeout) as client,
+            client.stream("GET", url, params=params) as resp,
+        ):
+            if resp.status_code >= 400:
+                detail: Any
+                try:
+                    detail = resp.read().decode("utf-8", errors="replace")
+                except Exception:
+                    detail = "<unreadable>"
+                print(
+                    f"error: GET {url} -> {resp.status_code}: {detail}",
+                    file=sys.stderr,
+                )
+                return 2
+
+            for raw_line in resp.iter_lines():
+                line = raw_line.rstrip("\r")
+                if not line or line.startswith(":"):
+                    continue
+                if line.startswith("data:"):
+                    data = line[len("data:") :].lstrip()
+                    if not data:
+                        continue
+                    try:
+                        parsed = json.loads(data)
+                    except ValueError:
+                        # Surface unparseable frames raw rather than silently dropping.
+                        print(data)
+                        sys.stdout.flush()
+                        continue
+                    print(json.dumps(parsed, sort_keys=True, default=str))
+                    sys.stdout.flush()
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
 def _cmd_session_snapshot_query(args: argparse.Namespace) -> int:
     base = _resolve_base_url(args)
     payload = _request(
@@ -306,6 +382,7 @@ def _cmd_session(args: argparse.Namespace) -> int:
         "freeze": _cmd_session_freeze,
         "fork": _cmd_session_fork,
         "snapshot-query": _cmd_session_snapshot_query,
+        "tail": _cmd_session_tail,
     }
     return handlers[args.session_command](args)
 
