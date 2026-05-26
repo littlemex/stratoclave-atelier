@@ -1,6 +1,6 @@
 # stratoclave-atelier: Getting Started
 
-**Last updated**: 2026-05-26
+**Last updated**: 2026-05-27 (Stage G)
 **Audience**: New contributors and operators bringing up atelier for the first time.
 
 ## Introduction
@@ -12,12 +12,16 @@ freezes a fork as an immutable, content-addressed version that can be
 referenced from other sessions.
 
 This guide walks through what you need to get atelier running on your
-laptop. Stages A through E are merged: Postgres schema and CRUD
+laptop. Stages A through G are merged: Postgres schema and CRUD
 (A / B), WebSocket ingest plus content-addressed freeze (C), fork-graph
-JSON and cross-session snapshot RPC (D), and a vanilla-JS SPA that
-drives the whole loop (E). See `PROJECT_STATUS.md` for the up-to-date
-component matrix and `STAGE_D_E_WALKTHROUGH.md` for the latest
-walkthrough.
+JSON and cross-session snapshot RPC (D), a vanilla-JS SPA that drives
+the whole loop (E), per-turn freeze + fork dialog + snapshot-query
+dialog + live-tail SSE + HTTP turn fallback + a `session` family of
+CLI subcommands (F), and a real agent loop via stratoclave-loom +
+cross-session memory via stratoclave-distill + claude-capture-style
+chat at `/` with the legacy 4-panel SPA preserved at `/panels` (G).
+See `PROJECT_STATUS.md` for the up-to-date component matrix and
+`STAGE_G_WALKTHROUGH.md` for the latest walkthrough.
 
 ## Where atelier sits in the 4-OSS series
 
@@ -54,8 +58,11 @@ pip install -e ".[dev]"
 ```
 
 This installs the runtime dependencies (FastAPI, SQLAlchemy[asyncio],
-asyncpg, alembic, pgvector, pydantic) plus the dev extras (pytest,
-ruff, mypy, httpx).
+asyncpg, alembic, pgvector, pydantic, httpx, websockets) plus the dev
+extras (pytest, ruff, mypy). Stage F promoted `httpx` and `websockets`
+to runtime deps because the CLI's `session` subcommands talk to the
+running server over HTTP and the WS ingest endpoint requires the
+`websockets` package at import time.
 
 ## Bring up Postgres
 
@@ -123,6 +130,13 @@ curl -s -X POST localhost:8000/api/sessions/<parent_id>/fork \
 
 # List the frozen versions belonging to a session.
 curl -s localhost:8000/api/sessions/<session_id>/versions
+
+# Stage F: append a single turn over plain HTTP, mirroring the
+# WebSocket ingest path. Useful when curl / scripts cannot easily
+# negotiate a WebSocket handshake.
+curl -s -X POST localhost:8000/api/sessions/<session_id>/turns \
+  -H 'content-type: application/json' \
+  -d '{"role": "user", "content": "hello"}'
 ```
 
 Versions are written through `POST /api/sessions/{id}/freeze` (Stage
@@ -159,6 +173,116 @@ The four panels are: groups, sessions filtered by the active group,
 turns + versions for the active session, and the SVG fork graph. See
 `docs/STAGE_D_E_WALKTHROUGH.md` for the manual Playwright journey.
 
+## Stage F: SPA upgrades
+
+Stage F adds three interactive surfaces to the SPA:
+
+- **Per-turn freeze**. Each turn row gets a `Freeze through` button.
+  A plain click freezes from that turn's `seq` through the latest
+  `seq`. Shift+click on two turns marks an explicit
+  `start_seq..end_seq` range (the first sets the anchor, the second
+  closes the range and triggers the freeze).
+- **Fork dialog**. Each Version row gets a `Fork` button. The dialog
+  asks for a child title and a `fork_seq` clamped to the version's
+  `start_seq..end_seq`, then calls `POST /api/sessions/{id}/fork`.
+- **Snapshot query**. Each Version row also gets a `Snapshot query`
+  button. The dialog asks a question, posts to
+  `POST /api/sessions/{id}/snapshot-query`, and renders the response
+  in-line.
+
+A live-tail `EventSource` against `/api/sessions/{id}/events` keeps the
+timeline current without manual reloads, and the turn form falls back
+to `POST /api/sessions/{id}/turns` if the WebSocket is unavailable.
+
+## Stage F: CLI session subcommands
+
+The `stratoclave-atelier session` family talks to the running server
+over HTTP. It is a thin admin shim, not a replacement for the SPA.
+
+```bash
+# Where the CLI looks for the server (priority: --base-url > env > default).
+export ATELIER_BASE_URL=http://localhost:8123
+
+# List sessions, optionally scoped to a group.
+stratoclave-atelier session list
+stratoclave-atelier session list --group-id <group_id>
+
+# Show one session and its versions.
+stratoclave-atelier session show <session_id>
+
+# Append a single turn (HTTP fallback to WS ingest).
+stratoclave-atelier session send-turn <session_id> --role user --content "hi"
+
+# Freeze the whole session (or pass --start-seq / --end-seq for a range).
+stratoclave-atelier session freeze <session_id> --label baseline
+
+# Fork a child session from a frozen version.
+stratoclave-atelier session fork <parent_session_id> \
+  --title branch-A --parent-version-id <version_id> --fork-seq 3
+
+# Run the cross-session snapshot RPC against a Version.
+stratoclave-atelier session snapshot-query <source_session_id> \
+  --target-version-id <version_id> --query "what changed?"
+```
+
+Every subcommand emits the response body as pretty-printed JSON on
+stdout. Failures (HTTP >= 400) print `error: METHOD path -> status: detail`
+to stderr and exit with status 2.
+
+## Stage G: chat at `/` and panels at `/panels`
+
+Stage G changes the front door. Browsing to `/` now shows a single-pane
+chat: a textarea, a stream of `user` / `assistant` bubbles, and a
+"Freeze" button. The four-panel UI from Stages B-F still exists --
+it has just moved to `/panels`. Both surfaces share the same SSE
+event stream, so a freeze triggered from chat shows up in the panels'
+Versions list and vice versa.
+
+To bring up a chat with a real agent locally:
+
+```bash
+# Pick a backend that loom knows about. claude_code is the default
+# happy path; kiro_code also works.
+export ATELIER_AGENT_BACKEND=claude_code
+export ATELIER_AGENT_CWD=$PWD
+
+stratoclave-atelier serve --in-memory --port 8123
+# open http://localhost:8123/ in a browser, type a prompt, hit Enter
+```
+
+`ATELIER_AGENT_BACKEND=none` (the default) makes the chat boot into a
+read-only mode: posting a prompt returns `503 Service Unavailable` so
+operators can decide when to wire a real backend.
+
+## Stage G: cross-session memory (optional)
+
+Memory is opt-in and runs on top of `stratoclave-distill`. Install the
+extra and switch the knobs:
+
+```bash
+pip install -e ".[memory]"
+
+export ATELIER_DISTILL_ENABLED=true
+export ATELIER_DISTILL_DATABASE_URL=postgresql://distill:distill@localhost:5432/distill
+export ATELIER_AGENT_MEMORY=true   # default
+
+stratoclave-atelier serve
+```
+
+Once memory is enabled:
+
+- `POST /api/sessions/{id}/freeze` hands the selected turn events to
+  distill so it can extract canonical / emerging / conflict / gap
+  rows. Failures are logged and never block the freeze.
+- `POST /api/sessions/{id}/agent-runs` calls
+  `Retriever.retrieve(query=prompt)` and prepends the result as a
+  `<memory>...</memory>` block before the user prompt. The chat marks
+  these turns with a `memory: on` badge.
+
+Either knob set to `false` (or the optional extra missing) demotes
+atelier to `NoopMemoryService`: the boot still succeeds, prompts go
+through unmodified, and the chat does not show the memory badge.
+
 ## Configuration
 
 All knobs are environment variables. Nothing is hard-coded in `src/`.
@@ -173,6 +297,13 @@ All knobs are environment variables. Nothing is hard-coded in `src/`.
 | `ATELIER_AUTH_MODE`       | `none`                            | `none` / `bearer` / `stratoclave_cognito`              |
 | `ATELIER_BEARER_TOKEN`    | (unset)                           | Required when `ATELIER_AUTH_MODE=bearer`               |
 | `ATELIER_BLOB_DIR`        | `.atelier-blobs`                  | Where frozen JSONL blobs are written                   |
+| `ATELIER_BASE_URL`        | `http://localhost:8000`           | Base URL the CLI `session` subcommands target          |
+| `ATELIER_AGENT_BACKEND`   | `none`                            | Loom backend: `none` / `claude_code` / `kiro_code`     |
+| `ATELIER_AGENT_CWD`       | (unset)                           | Working dir handed to the loom session (required when backend != `none`) |
+| `ATELIER_AGENT_ALLOWED_TOOLS` | (unset)                       | Comma-separated allowlist passed through to loom       |
+| `ATELIER_AGENT_MEMORY`    | `true`                            | Per-server toggle for memory retrieval on agent runs   |
+| `ATELIER_DISTILL_ENABLED` | `false`                           | Wire `DistillMemoryService` (requires the `[memory]` extra) |
+| `ATELIER_DISTILL_DATABASE_URL` | (unset)                      | Distill Postgres URL (required when distill is enabled) |
 
 To preview the effective configuration:
 
@@ -223,7 +354,16 @@ mypy src/stratoclave_atelier
 - Read `PROJECT_STATUS.md` for the live roadmap.
 - Read `PROJECT_RULES.md` before opening your first PR.
 - Read `STAGE_D_E_WALKTHROUGH.md` for the deep dive on fork-graph,
-  snapshot-query, and the SPA.
-- The walking skeleton is feature-complete; remaining work is polish
-  (live-tail SSE, per-turn freeze button, real LLM resolver, auth
-  wiring). See "Next steps" in `PROJECT_STATUS.md`.
+  snapshot-query, and the original 4-panel SPA (now at `/panels`).
+- Read `STAGE_F_WALKTHROUGH.md` for the deep dive on per-turn freeze,
+  the fork / snapshot-query dialogs, live-tail SSE, the HTTP turn
+  fallback, and the CLI `session` subcommands.
+- Read `STAGE_G_WALKTHROUGH.md` for the deep dive on the agent loop
+  (`AgentRunner` + loom), live SSE broadcast, the memory layer
+  (`MemoryService` + distill ingest / retrieve), and the chat shell
+  at `/`.
+- Remaining work is server-side: a real `DistillSnapshotResolver` to
+  replace `EchoSnapshotResolver`, a `session tail` CLI to mirror the
+  SPA's live tail, "spawn an agent on this version" buttons in the
+  panels, and end-to-end auth wiring. See "Next steps" in
+  `PROJECT_STATUS.md`.

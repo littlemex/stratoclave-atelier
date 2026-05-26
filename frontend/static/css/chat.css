@@ -1,0 +1,272 @@
+/* stratoclave-atelier chat (Stage G): claude-capture-style minimal UI.
+ *
+ * The 4-panel UI from Stages B-F lives at /panels and uses panels/app.css.
+ * Here we strip the chrome to: header / scrollable log / fixed prompt bar.
+ */
+
+:root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface-2: #1f242c;
+    --border: #30363d;
+    --text: #f0f6fc;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --user: #2f81f7;
+    --assistant: #c9d1d9;
+    --error: #f85149;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* ----- header ------------------------------------------------------------- */
+
+.chat-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+}
+
+.chat-header h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.chat-nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.chat-nav button,
+.chat-nav a {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.chat-nav button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.chat-nav button:not(:disabled):hover,
+.chat-nav a:hover {
+    background: var(--border);
+    text-decoration: none;
+}
+
+/* ----- log ---------------------------------------------------------------- */
+
+.chat-main {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 24px 0;
+    position: relative;
+}
+
+.chat-log {
+    list-style: none;
+    margin: 0 auto;
+    padding: 0 20px;
+    max-width: 760px;
+}
+
+.chat-empty {
+    margin: 24px auto;
+    max-width: 540px;
+    padding: 18px 20px;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    color: var(--muted);
+    text-align: center;
+}
+
+.chat-empty[hidden] {
+    display: none;
+}
+
+.chat-message {
+    margin: 16px 0;
+    padding: 14px 16px;
+    border-radius: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    word-wrap: break-word;
+}
+
+.chat-message.role-user {
+    background: rgba(47, 129, 247, 0.08);
+    border-color: rgba(47, 129, 247, 0.4);
+}
+
+.chat-message.role-assistant {
+    background: var(--surface);
+}
+
+.chat-message.role-system {
+    background: var(--surface-2);
+    border-style: dashed;
+    color: var(--muted);
+    font-style: italic;
+}
+
+.chat-message.role-error {
+    background: rgba(248, 81, 73, 0.08);
+    border-color: rgba(248, 81, 73, 0.5);
+    color: var(--error);
+}
+
+.chat-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 6px;
+}
+
+.chat-meta .role {
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.chat-body {
+    white-space: pre-wrap;
+    font-family: inherit;
+    margin: 0;
+}
+
+.chat-body.streaming::after {
+    content: "▍";
+    margin-left: 2px;
+    animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+    to {
+        visibility: hidden;
+    }
+}
+
+/* ----- form --------------------------------------------------------------- */
+
+.chat-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+}
+
+.chat-form textarea {
+    width: 100%;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    resize: vertical;
+    font-family: inherit;
+    font-size: 14px;
+    min-height: 60px;
+}
+
+.chat-form textarea:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+}
+
+.chat-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.chat-session-label {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.chat-form button[type="submit"] {
+    background: var(--user);
+    color: white;
+    border: none;
+    padding: 8px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.chat-form button[type="submit"]:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.chat-form button[type="submit"]:not(:disabled):hover {
+    background: var(--accent);
+}
+
+/* ----- status bar (toast) ------------------------------------------------- */
+
+.status {
+    position: fixed;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 16px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 200ms ease;
+    z-index: 10;
+}
+
+.status.show {
+    opacity: 1;
+}

@@ -24,7 +24,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from stratoclave_atelier import __version__
+from stratoclave_atelier.agent_runner import AgentRunner
 from stratoclave_atelier.api import (
+    agent_runs_router,
     events_router,
     fork_graph_router,
     groups_router,
@@ -36,6 +38,8 @@ from stratoclave_atelier.api import (
 from stratoclave_atelier.blobs import BlobStore, FileBlobStore
 from stratoclave_atelier.config import AtelierConfig
 from stratoclave_atelier.db import AsyncpgStore, Store, create_engine
+from stratoclave_atelier.events_bus import EventBus
+from stratoclave_atelier.memory import MemoryService, build_memory_service
 from stratoclave_atelier.snapshot_resolver import EchoSnapshotResolver, SnapshotResolver
 
 
@@ -45,6 +49,7 @@ def create_app(
     store: Store | None = None,
     blob_store: BlobStore | None = None,
     snapshot_resolver: SnapshotResolver | None = None,
+    memory_service: MemoryService | None = None,
 ) -> FastAPI:
     """Build a FastAPI application bound to the given config and store.
 
@@ -66,16 +71,30 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.blob_store = blob_store or FileBlobStore(cfg.blob_dir)
         app.state.snapshot_resolver = snapshot_resolver or EchoSnapshotResolver()
+        bus = EventBus()
+        app.state.event_bus = bus
+        memory = memory_service if memory_service is not None else await build_memory_service(cfg)
+        app.state.memory_service = memory
         if store is not None:
             app.state.store = store
-            yield
+            app.state.agent_runner = AgentRunner(config=cfg, store=store, bus=bus, memory=memory)
+            try:
+                yield
+            finally:
+                await app.state.agent_runner.close()
+                await memory.aclose()
             return
         engine = create_engine(cfg.database_url)
         runtime_store = AsyncpgStore(engine)
         app.state.store = runtime_store
+        app.state.agent_runner = AgentRunner(
+            config=cfg, store=runtime_store, bus=bus, memory=memory
+        )
         try:
             yield
         finally:
+            await app.state.agent_runner.close()
+            await memory.aclose()
             await runtime_store.dispose()
 
     app = FastAPI(
@@ -92,18 +111,25 @@ def create_app(
     app.include_router(ingest_router)
     app.include_router(fork_graph_router)
     app.include_router(snapshot_queries_router)
+    app.include_router(agent_runs_router)
     _mount_frontend(app)
     return app
 
 
 def _mount_frontend(app: FastAPI) -> None:
-    """Mount the Stage E SPA at ``/`` and its assets under ``/static``.
+    """Mount the Stage G chat at ``/`` and the legacy panels at ``/panels``.
 
-    The SPA is a single ``index.html`` plus vanilla JS / CSS shipped
-    from ``frontend/static/``. We resolve the directory relative to the
-    repository root (``__file__`` lives in ``src/stratoclave_atelier``)
-    and skip mounting when the directory does not exist -- e.g. when
-    only the wheel is installed and the frontend was not packaged.
+    Stage G replaces the four-panel UI as the default landing page with
+    a claude-capture-style chat surface. The Stage B-F panel SPA lives
+    under ``frontend/static/panels/`` and is reachable via ``/panels``
+    so power users can still drive groups, fork graphs, and snapshot
+    queries directly.
+
+    Both shells share ``/static`` for asset serving. We resolve the
+    directory relative to the repository root (``__file__`` lives in
+    ``src/stratoclave_atelier``) and skip mounting when the directory
+    does not exist -- e.g. when only the wheel is installed and the
+    frontend was not packaged.
     """
 
     package_dir = Path(__file__).resolve().parent
@@ -113,9 +139,18 @@ def _mount_frontend(app: FastAPI) -> None:
         return
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+    chat_index = static_dir / "index.html"
+    panels_index = static_dir / "panels" / "index.html"
+
     @app.get("/", include_in_schema=False)
     async def root() -> FileResponse:
-        return FileResponse(str(static_dir / "index.html"))
+        return FileResponse(str(chat_index))
+
+    if panels_index.is_file():
+
+        @app.get("/panels", include_in_schema=False)
+        async def panels() -> FileResponse:
+            return FileResponse(str(panels_index))
 
 
 def _build_module_app() -> FastAPI:

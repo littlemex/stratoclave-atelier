@@ -32,9 +32,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 
-from stratoclave_atelier.api.deps import get_store
+from stratoclave_atelier.api.deps import get_event_bus, get_store
 from stratoclave_atelier.core import ConflictError, NotFoundError
 from stratoclave_atelier.db import Store
+from stratoclave_atelier.events_bus import EventBus
 
 router = APIRouter(tags=["ingest"])
 
@@ -48,6 +49,7 @@ async def ingest_session(websocket: WebSocket, session_id: UUID) -> None:
     """Stream JSONL turns into a session's event log."""
 
     store: Store = get_store(websocket)  # type: ignore[arg-type]
+    bus: EventBus = get_event_bus(websocket)  # type: ignore[arg-type]
     await websocket.accept()
 
     try:
@@ -114,6 +116,7 @@ async def ingest_session(websocket: WebSocket, session_id: UUID) -> None:
                 await websocket.close(code=_CLOSE_SESSION_FROZEN, reason=str(exc))
                 return
 
+            await bus.publish(event)
             await websocket.send_json(
                 {
                     "type": "ack",

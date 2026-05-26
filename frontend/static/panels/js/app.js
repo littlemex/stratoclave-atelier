@@ -1,9 +1,9 @@
 // stratoclave-atelier SPA: vanilla ES modules, no build step.
 //
-// Wires the Stage B/C/D REST + WS endpoints to a four-panel UI:
+// Wires the Stage B/C/D/F REST + WS + SSE endpoints to a four-panel UI:
 // 1. Groups (create + list)
 // 2. Sessions (create + list, filtered by active group)
-// 3. Turns (WebSocket ingest + freeze + version list)
+// 3. Turns (WS ingest + SSE live tail + per-turn freeze + version list)
 // 4. Fork graph (SVG drawn from /api/groups/{id}/fork-graph)
 //
 // State is intentionally kept as a flat module-level object: this is a
@@ -18,6 +18,11 @@ const state = {
     versions: [],
     turns: [],
     ws: null,
+    eventSource: null,
+    lastSeq: -1,
+    rangeAnchorSeq: null,
+    forkVersion: null,
+    snapshotVersion: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -110,17 +115,22 @@ async function loadSessions() {
 async function selectSession(session) {
     state.activeSessionId = session.session_id;
     state.activeSessionTitle = session.title;
+    state.lastSeq = -1;
+    state.rangeAnchorSeq = null;
+    state.turns = [];
     document.getElementById("active-session-label").textContent = `· ${session.title}`;
     document.getElementById("active-graph-label").textContent = state.activeGroupName
         ? `· ${state.activeGroupName}`
         : `· ${session.title}`;
     document.getElementById("form-send-turn").hidden = false;
-    document.getElementById("button-freeze").hidden = false;
+    document.getElementById("freeze-controls").hidden = false;
+    updateRangeIndicator();
     await loadSessions();
     await loadTimeline();
     await loadVersions();
     await loadForkGraph();
     openIngestSocket();
+    openLiveTail();
 }
 
 async function createSession(event) {
@@ -137,15 +147,12 @@ async function createSession(event) {
 }
 
 // ---------------------------------------------------------------------------
-// Turns + WebSocket ingest
+// Turns + WebSocket ingest + SSE live tail
 // ---------------------------------------------------------------------------
 
 async function loadTimeline() {
     if (!state.activeSessionId) return;
     const events = [];
-    // Stage C SSE replay: we just consume it as plain HTTP for the SPA
-    // (browsers can stream SSE via EventSource, but for a static replay
-    // a single fetch suffices and is easier to test).
     const resp = await fetch(
         `/api/sessions/${encodeURIComponent(state.activeSessionId)}/events`
     );
@@ -163,6 +170,7 @@ async function loadTimeline() {
         }
     }
     state.turns = events;
+    state.lastSeq = events.length === 0 ? -1 : events[events.length - 1].seq;
     renderTimeline();
 }
 
@@ -173,12 +181,45 @@ function renderTimeline() {
         const li = document.createElement("li");
         li.dataset.kind = ev.kind;
         li.dataset.testid = "turn-item";
+        li.dataset.seq = String(ev.seq);
+        if (ev.seq === state.rangeAnchorSeq) li.classList.add("range-anchor");
         const summary = ev.kind === "turn"
             ? `${ev.payload.role || "?"}: ${ev.payload.content || ""}`
             : `[${ev.kind}] ${JSON.stringify(ev.payload)}`;
-        li.textContent = `#${ev.seq} ${summary}`;
+        li.append(document.createTextNode(`#${ev.seq} ${summary} `));
+
+        if (ev.kind === "turn") {
+            const actions = document.createElement("span");
+            actions.className = "turn-actions";
+
+            const through = document.createElement("button");
+            through.type = "button";
+            through.dataset.testid = "freeze-through-button";
+            through.textContent = "Freeze through";
+            through.addEventListener("click", (e) => {
+                e.stopPropagation();
+                if (e.shiftKey) {
+                    toggleRangeAnchor(ev.seq);
+                } else if (state.rangeAnchorSeq !== null) {
+                    completeRangeFreeze(ev.seq);
+                } else {
+                    freezeThroughSeq(ev.seq);
+                }
+            });
+            actions.appendChild(through);
+
+            li.appendChild(actions);
+        }
         list.appendChild(li);
     }
+}
+
+function mergeIncomingEvent(ev) {
+    if (typeof ev.seq !== "number") return;
+    if (ev.seq <= state.lastSeq) return;
+    state.turns.push(ev);
+    state.lastSeq = ev.seq;
+    renderTimeline();
 }
 
 function openIngestSocket() {
@@ -192,20 +233,44 @@ function openIngestSocket() {
         state.activeSessionId
     )}/ingest`;
     const ws = new WebSocket(url);
-    ws.addEventListener("message", async (e) => {
-        try {
-            const ack = JSON.parse(e.data);
-            if (ack && ack.seq !== undefined) {
-                await loadTimeline();
-            }
-        } catch {
-            // ignore non-json frames
-        }
-    });
     ws.addEventListener("close", () => {
         if (state.ws === ws) state.ws = null;
     });
     state.ws = ws;
+}
+
+function openLiveTail() {
+    if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
+    }
+    if (!state.activeSessionId) return;
+    const fromSeq = state.lastSeq + 1;
+    const url =
+        `/api/sessions/${encodeURIComponent(state.activeSessionId)}/events` +
+        `?from_seq=${fromSeq}`;
+    let es;
+    try {
+        es = new EventSource(url);
+    } catch {
+        return;
+    }
+    es.addEventListener("message", async (e) => {
+        try {
+            const ev = JSON.parse(e.data);
+            mergeIncomingEvent(ev);
+            if (ev.kind === "freeze") {
+                await loadVersions();
+                await loadForkGraph();
+            }
+        } catch {
+            // ignore
+        }
+    });
+    es.addEventListener("error", () => {
+        // Browsers retry SSE automatically. We close on session switch.
+    });
+    state.eventSource = es;
 }
 
 async function sendTurn(event) {
@@ -217,7 +282,19 @@ async function sendTurn(event) {
     const payload = { kind: "turn", role, content };
 
     if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-        await waitForOpenSocket();
+        try {
+            await waitForOpenSocket();
+        } catch {
+            // WS unavailable -- fall back to HTTP turn append.
+            await api(
+                "POST",
+                `/api/sessions/${encodeURIComponent(state.activeSessionId)}/turns`,
+                { role, content }
+            );
+            form.elements.content.value = "";
+            flash("turn sent (HTTP)");
+            return;
+        }
     }
     state.ws.send(JSON.stringify(payload));
     form.elements.content.value = "";
@@ -236,7 +313,7 @@ function waitForOpenSocket() {
 }
 
 // ---------------------------------------------------------------------------
-// Versions + freeze
+// Versions + freeze (whole + per-turn + range)
 // ---------------------------------------------------------------------------
 
 async function loadVersions() {
@@ -252,8 +329,34 @@ async function loadVersions() {
         const li = document.createElement("li");
         li.dataset.testid = "version-item";
         li.dataset.versionId = v.version_id;
+
+        const row = document.createElement("div");
+        row.className = "version-row";
+
+        const head = document.createElement("span");
         const label = v.label || `v${v.start_seq}-${v.end_seq}`;
-        li.textContent = `${label} (turns ${v.start_seq}..${v.end_seq}, ${v.byte_size}B)`;
+        head.textContent = `${label} (turns ${v.start_seq}..${v.end_seq}, ${v.byte_size}B)`;
+        row.appendChild(head);
+
+        const actions = document.createElement("div");
+        actions.className = "version-actions";
+
+        const forkBtn = document.createElement("button");
+        forkBtn.type = "button";
+        forkBtn.dataset.testid = "version-fork-button";
+        forkBtn.textContent = "Fork";
+        forkBtn.addEventListener("click", () => openForkDialog(v));
+        actions.appendChild(forkBtn);
+
+        const askBtn = document.createElement("button");
+        askBtn.type = "button";
+        askBtn.dataset.testid = "version-ask-button";
+        askBtn.textContent = "Snapshot query";
+        askBtn.addEventListener("click", () => openSnapshotDialog(v));
+        actions.appendChild(askBtn);
+
+        row.appendChild(actions);
+        li.appendChild(row);
         list.appendChild(li);
     }
 }
@@ -270,6 +373,166 @@ async function freezeWholeSession() {
     await loadTimeline();
     await loadVersions();
     await loadForkGraph();
+}
+
+async function freezeThroughSeq(seq) {
+    if (!state.activeSessionId) return;
+    const label = `from #${seq} at ${new Date().toISOString()}`;
+    await api(
+        "POST",
+        `/api/sessions/${encodeURIComponent(state.activeSessionId)}/freeze`,
+        { start_seq: seq, label }
+    );
+    flash(`frozen through #${seq}`);
+    await loadVersions();
+    await loadForkGraph();
+}
+
+async function completeRangeFreeze(endSeq) {
+    if (!state.activeSessionId) return;
+    if (state.rangeAnchorSeq === null) return;
+    const startSeq = Math.min(state.rangeAnchorSeq, endSeq);
+    const finalEnd = Math.max(state.rangeAnchorSeq, endSeq);
+    const label = `range #${startSeq}-#${finalEnd} at ${new Date().toISOString()}`;
+    await api(
+        "POST",
+        `/api/sessions/${encodeURIComponent(state.activeSessionId)}/freeze`,
+        { start_seq: startSeq, end_seq: finalEnd, label }
+    );
+    state.rangeAnchorSeq = null;
+    updateRangeIndicator();
+    flash(`frozen range #${startSeq}..#${finalEnd}`);
+    renderTimeline();
+    await loadVersions();
+    await loadForkGraph();
+}
+
+function toggleRangeAnchor(seq) {
+    state.rangeAnchorSeq = state.rangeAnchorSeq === seq ? null : seq;
+    updateRangeIndicator();
+    renderTimeline();
+}
+
+function cancelRange() {
+    state.rangeAnchorSeq = null;
+    updateRangeIndicator();
+    renderTimeline();
+}
+
+function updateRangeIndicator() {
+    const indicator = document.getElementById("range-indicator");
+    const cancel = document.getElementById("button-cancel-range");
+    if (state.rangeAnchorSeq === null) {
+        indicator.hidden = true;
+        cancel.hidden = true;
+        indicator.textContent = "";
+    } else {
+        indicator.hidden = false;
+        cancel.hidden = false;
+        indicator.textContent = `range anchor: #${state.rangeAnchorSeq}`;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fork dialog
+// ---------------------------------------------------------------------------
+
+function openForkDialog(version) {
+    state.forkVersion = version;
+    const dialog = document.getElementById("dialog-fork");
+    const ctx = document.getElementById("fork-dialog-context");
+    const form = document.getElementById("form-fork");
+    ctx.textContent = `from version ${version.label || version.version_id} (turns ${version.start_seq}..${version.end_seq})`;
+    form.elements.title.value = "";
+    form.elements.fork_seq.min = String(version.start_seq);
+    form.elements.fork_seq.max = String(version.end_seq);
+    form.elements.fork_seq.value = String(version.start_seq);
+    if (typeof dialog.showModal === "function") {
+        dialog.showModal();
+    } else {
+        dialog.setAttribute("open", "");
+    }
+}
+
+async function submitForkDialog(event) {
+    const dialog = document.getElementById("dialog-fork");
+    const form = document.getElementById("form-fork");
+    if (event.submitter && event.submitter.value === "cancel") {
+        dialog.close();
+        return;
+    }
+    event.preventDefault();
+    if (!state.forkVersion || !state.activeSessionId) {
+        dialog.close();
+        return;
+    }
+    const title = form.elements.title.value.trim();
+    const forkSeq = Number(form.elements.fork_seq.value);
+    if (!title || Number.isNaN(forkSeq)) return;
+    const payload = {
+        title,
+        parent_version_id: state.forkVersion.version_id,
+        fork_seq: forkSeq,
+    };
+    if (state.activeGroupId) payload.group_id = state.activeGroupId;
+    const child = await api(
+        "POST",
+        `/api/sessions/${encodeURIComponent(state.activeSessionId)}/fork`,
+        payload
+    );
+    flash(`forked "${child.title}"`);
+    dialog.close();
+    await loadSessions();
+    await loadForkGraph();
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot-query dialog
+// ---------------------------------------------------------------------------
+
+function openSnapshotDialog(version) {
+    state.snapshotVersion = version;
+    const dialog = document.getElementById("dialog-snapshot");
+    const ctx = document.getElementById("snapshot-dialog-context");
+    const form = document.getElementById("form-snapshot");
+    const response = document.getElementById("snapshot-response");
+    ctx.textContent = `against version ${version.label || version.version_id} (turns ${version.start_seq}..${version.end_seq})`;
+    form.elements.query.value = "";
+    response.hidden = true;
+    response.textContent = "";
+    if (typeof dialog.showModal === "function") {
+        dialog.showModal();
+    } else {
+        dialog.setAttribute("open", "");
+    }
+}
+
+async function submitSnapshotDialog(event) {
+    const dialog = document.getElementById("dialog-snapshot");
+    const form = document.getElementById("form-snapshot");
+    const responseEl = document.getElementById("snapshot-response");
+    if (event.submitter && event.submitter.value === "cancel") {
+        dialog.close();
+        return;
+    }
+    event.preventDefault();
+    if (!state.snapshotVersion || !state.activeSessionId) {
+        dialog.close();
+        return;
+    }
+    const query = form.elements.query.value.trim();
+    if (!query) return;
+    const row = await api(
+        "POST",
+        `/api/sessions/${encodeURIComponent(state.activeSessionId)}/snapshot-query`,
+        {
+            target_version_id: state.snapshotVersion.version_id,
+            query,
+        }
+    );
+    responseEl.hidden = false;
+    responseEl.textContent = row.response || "(no response)";
+    flash("snapshot query answered");
 }
 
 // ---------------------------------------------------------------------------
@@ -302,9 +565,6 @@ function renderForkGraph(graph) {
     const nodes = graph.nodes || [];
     const edges = graph.edges || [];
 
-    // Simple deterministic layout: sort by created order (already returned
-    // sorted by store), assign columns by parent depth, rows by sibling
-    // index.
     const depthByNode = new Map();
     for (const n of nodes) {
         const parent = n.parent_session_id;
@@ -395,5 +655,14 @@ document.addEventListener("DOMContentLoaded", async () => {
         .addEventListener("submit", createSession);
     document.getElementById("form-send-turn").addEventListener("submit", sendTurn);
     document.getElementById("button-freeze").addEventListener("click", freezeWholeSession);
+    document
+        .getElementById("button-cancel-range")
+        .addEventListener("click", cancelRange);
+    document
+        .getElementById("form-fork")
+        .addEventListener("submit", submitForkDialog);
+    document
+        .getElementById("form-snapshot")
+        .addEventListener("submit", submitSnapshotDialog);
     await loadGroups();
 });

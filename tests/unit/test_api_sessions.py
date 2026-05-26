@@ -111,3 +111,39 @@ async def test_list_versions_for_session(client: TestClient, store: InMemoryStor
 def test_list_versions_for_unknown_session_returns_404(client: TestClient) -> None:
     resp = client.get(f"/api/sessions/{uuid4()}/versions")
     assert resp.status_code == 404
+
+
+def test_append_turn_via_http_round_trips(client: TestClient) -> None:
+    """``POST /api/sessions/{id}/turns`` mirrors the WS ingest path."""
+
+    created = client.post("/api/sessions", json={"title": "t"}).json()
+    resp = client.post(
+        f"/api/sessions/{created['session_id']}/turns",
+        json={"role": "user", "content": "hello"},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["kind"] == "turn"
+    assert body["payload"] == {"kind": "turn", "role": "user", "content": "hello"}
+    assert body["seq"] == 0
+
+
+def test_append_turn_to_unknown_session_returns_404(client: TestClient) -> None:
+    resp = client.post(
+        f"/api/sessions/{uuid4()}/turns",
+        json={"role": "user", "content": "hello"},
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_append_turn_to_frozen_session_returns_409(
+    client: TestClient, store: InMemoryStore
+) -> None:
+    session = await store.create_session(title="frozen-one")
+    await store.update_session_status(session.session_id, "frozen")
+    resp = client.post(
+        f"/api/sessions/{session.session_id}/turns",
+        json={"role": "user", "content": "hello"},
+    )
+    assert resp.status_code == 409

@@ -1,19 +1,38 @@
 """CLI entrypoint for stratoclave-atelier.
 
-Stage A only exposes ``serve`` (uvicorn launcher) and ``migrate``
-(thin shim around ``alembic upgrade``). Subsequent stages will add
-``session``, ``group``, and ``version`` subcommands.
+Stage A introduced ``serve`` (uvicorn launcher), ``migrate`` (thin
+shim around ``alembic upgrade``), and ``config`` (effective env dump).
+Stage F adds a thin ``session`` family of HTTP-backed subcommands so
+operators can drive an already-running atelier instance from the
+terminal:
+
+* ``session list``           -- list sessions, optionally filtered by group.
+* ``session show``           -- show one session (with versions).
+* ``session send-turn``      -- append a single turn via HTTP.
+* ``session freeze``         -- freeze a turn range into a Version.
+* ``session fork``           -- fork a child session from a frozen Version.
+* ``session snapshot-query`` -- run the cross-session RPC against a Version.
+
+The ``--in-memory`` flag on ``serve`` no longer requires
+``ATELIER_DATABASE_URL`` -- a placeholder is wired in if the variable is
+unset, since the in-memory backend never opens a real connection.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from collections.abc import Sequence
+from typing import Any
 
 from stratoclave_atelier import __version__
 from stratoclave_atelier.config import AtelierConfig
+
+_DEFAULT_BASE_URL = "http://localhost:8000"
+_BASE_URL_ENV = "ATELIER_BASE_URL"
+_IN_MEMORY_PLACEHOLDER_URL = "postgresql+asyncpg://atelier:atelier@localhost:5432/atelier"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -44,15 +63,78 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("migrate", help="Run alembic upgrade head.")
     sub.add_parser("config", help="Print effective configuration as a debug dump.")
 
+    session = sub.add_parser("session", help="HTTP-backed session admin operations.")
+    session.add_argument(
+        "--base-url",
+        default=None,
+        help=(f"Atelier server base URL. Falls back to ${_BASE_URL_ENV} or {_DEFAULT_BASE_URL}."),
+    )
+    sess_sub = session.add_subparsers(dest="session_command", required=True)
+
+    s_list = sess_sub.add_parser("list", help="List sessions.")
+    s_list.add_argument("--group-id", default=None, help="Filter by group id (UUID).")
+
+    s_show = sess_sub.add_parser("show", help="Show one session and its versions.")
+    s_show.add_argument("session_id", help="Session UUID.")
+
+    s_send = sess_sub.add_parser("send-turn", help="Append a single turn (HTTP).")
+    s_send.add_argument("session_id", help="Session UUID.")
+    s_send.add_argument("--role", default="user", help="Turn role (default: user).")
+    s_send.add_argument("--content", required=True, help="Turn content as a string.")
+
+    s_freeze = sess_sub.add_parser(
+        "freeze",
+        help="Freeze a turn range into an immutable Version.",
+    )
+    s_freeze.add_argument("session_id", help="Session UUID.")
+    s_freeze.add_argument("--start-seq", type=int, default=None, help="Inclusive start seq.")
+    s_freeze.add_argument("--end-seq", type=int, default=None, help="Inclusive end seq.")
+    s_freeze.add_argument("--label", default=None, help="Free-form label for the Version.")
+
+    s_fork = sess_sub.add_parser("fork", help="Fork a child session from a frozen Version.")
+    s_fork.add_argument("session_id", help="Parent session UUID.")
+    s_fork.add_argument("--title", required=True, help="Child session title.")
+    s_fork.add_argument(
+        "--parent-version-id",
+        required=True,
+        help="UUID of the Version to fork from.",
+    )
+    s_fork.add_argument(
+        "--fork-seq",
+        type=int,
+        required=True,
+        help="Turn seq inside the version where the child branches off.",
+    )
+    s_fork.add_argument("--group-id", default=None, help="Optional group id for the child.")
+
+    s_snap = sess_sub.add_parser(
+        "snapshot-query",
+        help="Run a cross-session snapshot-query against a Version.",
+    )
+    s_snap.add_argument("session_id", help="Source session UUID (the asker).")
+    s_snap.add_argument(
+        "--target-version-id",
+        required=True,
+        help="UUID of the Version being asked about.",
+    )
+    s_snap.add_argument("--query", required=True, help="The natural-language question.")
+
     return parser
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
+    if args.in_memory and not os.environ.get("ATELIER_DATABASE_URL"):
+        # The in-memory store never opens a connection, so a placeholder is
+        # plenty -- but AtelierConfig.from_env still requires the var to be
+        # non-empty. Setting it here keeps the no-hardcode policy intact
+        # because the value is documented as a placeholder, not a real URL.
+        os.environ["ATELIER_DATABASE_URL"] = _IN_MEMORY_PLACEHOLDER_URL
+
     cfg = AtelierConfig.from_env()
-    host = args.host or cfg.host
-    port = args.port or cfg.port
+    host = cfg.host if args.host is None else args.host
+    port = cfg.port if args.port is None else args.port
     if args.in_memory:
         from stratoclave_atelier.blobs import InMemoryBlobStore
         from stratoclave_atelier.db import InMemoryStore
@@ -102,6 +184,132 @@ def _cmd_config(_: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_base_url(args: argparse.Namespace) -> str:
+    return args.base_url or os.environ.get(_BASE_URL_ENV) or _DEFAULT_BASE_URL
+
+
+def _emit(payload: Any) -> None:
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+
+
+def _request(
+    method: str,
+    base_url: str,
+    path: str,
+    *,
+    body: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+) -> Any:
+    import httpx
+
+    url = base_url.rstrip("/") + path
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.request(method, url, json=body, params=params)
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json()
+        except ValueError:
+            detail = resp.text
+        print(
+            f"error: {method} {path} -> {resp.status_code}: {detail}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if resp.status_code == 204 or not resp.content:
+        return None
+    return resp.json()
+
+
+def _cmd_session_list(args: argparse.Namespace) -> int:
+    base = _resolve_base_url(args)
+    params = {"group_id": args.group_id} if args.group_id else None
+    payload = _request("GET", base, "/api/sessions", params=params)
+    _emit(payload)
+    return 0
+
+
+def _cmd_session_show(args: argparse.Namespace) -> int:
+    base = _resolve_base_url(args)
+    session = _request("GET", base, f"/api/sessions/{args.session_id}")
+    versions = _request("GET", base, f"/api/sessions/{args.session_id}/versions")
+    _emit({"session": session, "versions": versions})
+    return 0
+
+
+def _cmd_session_send_turn(args: argparse.Namespace) -> int:
+    base = _resolve_base_url(args)
+    payload = _request(
+        "POST",
+        base,
+        f"/api/sessions/{args.session_id}/turns",
+        body={"role": args.role, "content": args.content},
+    )
+    _emit(payload)
+    return 0
+
+
+def _cmd_session_freeze(args: argparse.Namespace) -> int:
+    base = _resolve_base_url(args)
+    body: dict[str, Any] = {}
+    if args.start_seq is not None:
+        body["start_seq"] = args.start_seq
+    if args.end_seq is not None:
+        body["end_seq"] = args.end_seq
+    if args.label is not None:
+        body["label"] = args.label
+    payload = _request(
+        "POST",
+        base,
+        f"/api/sessions/{args.session_id}/freeze",
+        body=body,
+    )
+    _emit(payload)
+    return 0
+
+
+def _cmd_session_fork(args: argparse.Namespace) -> int:
+    base = _resolve_base_url(args)
+    body: dict[str, Any] = {
+        "title": args.title,
+        "parent_version_id": args.parent_version_id,
+        "fork_seq": args.fork_seq,
+    }
+    if args.group_id is not None:
+        body["group_id"] = args.group_id
+    payload = _request(
+        "POST",
+        base,
+        f"/api/sessions/{args.session_id}/fork",
+        body=body,
+    )
+    _emit(payload)
+    return 0
+
+
+def _cmd_session_snapshot_query(args: argparse.Namespace) -> int:
+    base = _resolve_base_url(args)
+    payload = _request(
+        "POST",
+        base,
+        f"/api/sessions/{args.session_id}/snapshot-query",
+        body={"target_version_id": args.target_version_id, "query": args.query},
+    )
+    _emit(payload)
+    return 0
+
+
+def _cmd_session(args: argparse.Namespace) -> int:
+    handlers = {
+        "list": _cmd_session_list,
+        "show": _cmd_session_show,
+        "send-turn": _cmd_session_send_turn,
+        "freeze": _cmd_session_freeze,
+        "fork": _cmd_session_fork,
+        "snapshot-query": _cmd_session_snapshot_query,
+    }
+    return handlers[args.session_command](args)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -109,6 +317,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "serve": _cmd_serve,
         "migrate": _cmd_migrate,
         "config": _cmd_config,
+        "session": _cmd_session,
     }
     return handlers[args.command](args)
 

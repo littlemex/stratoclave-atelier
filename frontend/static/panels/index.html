@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>stratoclave-atelier — panels</title>
+    <link rel="stylesheet" href="/static/panels/css/app.css" />
+</head>
+<body>
+    <header>
+        <h1>stratoclave-atelier — panels</h1>
+        <p class="subtitle">
+            workshop for agent sessions
+            (<a href="/" data-testid="back-to-chat">back to chat</a>)
+        </p>
+    </header>
+    <main>
+        <section class="panel" id="panel-groups">
+            <h2>Groups</h2>
+            <form id="form-create-group" class="row">
+                <input
+                    type="text"
+                    name="name"
+                    placeholder="group name"
+                    required
+                    minlength="1"
+                    maxlength="200"
+                    data-testid="group-name-input"
+                />
+                <button type="submit" data-testid="group-create-button">Create</button>
+            </form>
+            <ul id="list-groups" class="list" data-testid="groups-list"></ul>
+        </section>
+
+        <section class="panel" id="panel-sessions">
+            <h2>Sessions <span id="active-group-label" class="muted"></span></h2>
+            <form id="form-create-session" class="row">
+                <input
+                    type="text"
+                    name="title"
+                    placeholder="session title"
+                    required
+                    minlength="1"
+                    maxlength="200"
+                    data-testid="session-title-input"
+                />
+                <button type="submit" data-testid="session-create-button">Create</button>
+            </form>
+            <ul id="list-sessions" class="list" data-testid="sessions-list"></ul>
+        </section>
+
+        <section class="panel" id="panel-timeline">
+            <h2>Turns <span id="active-session-label" class="muted"></span></h2>
+            <form id="form-send-turn" class="row" hidden>
+                <input
+                    type="text"
+                    name="role"
+                    placeholder="role (user / assistant)"
+                    value="user"
+                    required
+                    data-testid="turn-role-input"
+                />
+                <input
+                    type="text"
+                    name="content"
+                    placeholder="turn content"
+                    required
+                    data-testid="turn-content-input"
+                />
+                <button type="submit" data-testid="turn-send-button">Send</button>
+            </form>
+            <div id="freeze-controls" hidden class="freeze-controls">
+                <button
+                    id="button-freeze"
+                    type="button"
+                    data-testid="freeze-button"
+                >
+                    Freeze whole session
+                </button>
+                <span id="range-indicator" class="range-indicator" hidden></span>
+                <button
+                    id="button-cancel-range"
+                    type="button"
+                    class="button-secondary"
+                    hidden
+                    data-testid="freeze-range-cancel"
+                >
+                    Cancel range
+                </button>
+                <span class="hint">
+                    Click <strong>Freeze through</strong> on a turn to freeze
+                    that turn through the latest one. Shift+click two turns to
+                    freeze an explicit range.
+                </span>
+            </div>
+            <ol id="list-turns" class="timeline" data-testid="turns-list"></ol>
+            <h3>Versions</h3>
+            <ul id="list-versions" class="list" data-testid="versions-list"></ul>
+        </section>
+
+        <section class="panel" id="panel-graph">
+            <h2>Fork graph <span id="active-graph-label" class="muted"></span></h2>
+            <svg
+                id="fork-graph-svg"
+                viewBox="0 0 800 400"
+                preserveAspectRatio="xMidYMid meet"
+                data-testid="fork-graph-svg"
+            ></svg>
+        </section>
+    </main>
+    <div id="status-bar" class="status" data-testid="status-bar" aria-live="polite"></div>
+
+    <dialog id="dialog-fork" data-testid="dialog-fork">
+        <form method="dialog" id="form-fork">
+            <h3>Fork from version</h3>
+            <p id="fork-dialog-context" class="muted"></p>
+            <label>
+                Child session title
+                <input
+                    type="text"
+                    name="title"
+                    required
+                    minlength="1"
+                    maxlength="200"
+                    data-testid="fork-title-input"
+                />
+            </label>
+            <label>
+                Fork seq (within version range)
+                <input
+                    type="number"
+                    name="fork_seq"
+                    min="0"
+                    required
+                    data-testid="fork-seq-input"
+                />
+            </label>
+            <menu>
+                <button
+                    type="button"
+                    value="cancel"
+                    data-testid="fork-cancel-button"
+                >
+                    Cancel
+                </button>
+                <button
+                    type="submit"
+                    value="confirm"
+                    data-testid="fork-confirm-button"
+                >
+                    Fork
+                </button>
+            </menu>
+        </form>
+    </dialog>
+
+    <dialog id="dialog-snapshot" data-testid="dialog-snapshot">
+        <form method="dialog" id="form-snapshot">
+            <h3>Snapshot query</h3>
+            <p id="snapshot-dialog-context" class="muted"></p>
+            <label>
+                Question
+                <textarea
+                    name="query"
+                    required
+                    minlength="1"
+                    maxlength="4000"
+                    rows="4"
+                    data-testid="snapshot-query-input"
+                ></textarea>
+            </label>
+            <pre
+                id="snapshot-response"
+                class="snapshot-response"
+                hidden
+                data-testid="snapshot-response"
+            ></pre>
+            <menu>
+                <button
+                    type="button"
+                    value="cancel"
+                    data-testid="snapshot-cancel-button"
+                >
+                    Close
+                </button>
+                <button
+                    type="submit"
+                    value="confirm"
+                    data-testid="snapshot-confirm-button"
+                >
+                    Ask
+                </button>
+            </menu>
+        </form>
+    </dialog>
+
+    <script type="module" src="/static/panels/js/app.js"></script>
+</body>
+</html>

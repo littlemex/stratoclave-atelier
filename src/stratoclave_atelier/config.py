@@ -21,12 +21,16 @@ from typing import Literal, cast
 from stratoclave_atelier.core.errors import ConfigError
 
 AtelierAuthMode = Literal["none", "bearer", "stratoclave_cognito"]
+AtelierAgentBackend = Literal["none", "claude_code", "kiro_code", "mock"]
+AtelierSnapshotResolver = Literal["echo", "distill"]
 
 _DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = 8000
 _DEFAULT_LOG_LEVEL = "info"
 _DEFAULT_AUTH_MODE: AtelierAuthMode = "none"
 _DEFAULT_BLOB_DIR = ".atelier-blobs"
+_DEFAULT_AGENT_BACKEND: AtelierAgentBackend = "none"
+_DEFAULT_SNAPSHOT_RESOLVER: AtelierSnapshotResolver = "echo"
 
 
 def _read_int(env: Mapping[str, str], key: str, default: int) -> int:
@@ -56,6 +60,14 @@ class AtelierConfig:
     auth_mode: AtelierAuthMode = _DEFAULT_AUTH_MODE
     bearer_token: str | None = None
     blob_dir: str = _DEFAULT_BLOB_DIR
+    agent_backend: AtelierAgentBackend = _DEFAULT_AGENT_BACKEND
+    agent_cwd: str | None = None
+    agent_allowed_tools: tuple[str, ...] = ()
+    distill_enabled: bool = False
+    distill_database_url: str | None = None
+    distill_auto_ingest: bool = True
+    agent_memory_enabled: bool = True
+    snapshot_resolver: AtelierSnapshotResolver = _DEFAULT_SNAPSHOT_RESOLVER
     extra: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -66,6 +78,21 @@ class AtelierConfig:
         if self.auth_mode == "bearer" and not self.bearer_token:
             raise ConfigError(
                 "bearer_token is required when auth_mode='bearer' (set ATELIER_BEARER_TOKEN)"
+            )
+        if self.agent_backend != "none" and not self.agent_cwd:
+            raise ConfigError(
+                f"agent_cwd is required when agent_backend={self.agent_backend!r} "
+                "(set ATELIER_AGENT_CWD)"
+            )
+        if self.distill_enabled and not self.distill_database_url:
+            raise ConfigError(
+                "distill_database_url is required when distill_enabled=True "
+                "(set ATELIER_DISTILL_DATABASE_URL)"
+            )
+        if self.snapshot_resolver == "distill" and not self.distill_enabled:
+            raise ConfigError(
+                "snapshot_resolver='distill' requires distill_enabled=True "
+                "(set ATELIER_DISTILL_ENABLED=true)"
             )
 
     @classmethod
@@ -105,6 +132,28 @@ class AtelierConfig:
                 return int(cast(int, value))
             return _read_int(src, env_key, default)
 
+        def pop_bool(key: str, env_key: str, default: bool) -> bool:
+            if key in overrides:
+                value = overrides.pop(key)
+                if isinstance(value, bool):
+                    return value
+                return str(value).lower() in ("1", "true", "yes", "on")
+            raw = src.get(env_key)
+            if raw is None or raw == "":
+                return default
+            return raw.lower() in ("1", "true", "yes", "on")
+
+        def pop_csv(key: str, env_key: str) -> tuple[str, ...]:
+            if key in overrides:
+                value = overrides.pop(key)
+                if value is None or value == "":
+                    return ()
+                if isinstance(value, str):
+                    return tuple(s.strip() for s in value.split(",") if s.strip())
+                return tuple(str(v) for v in cast(tuple[object, ...], value))
+            raw = src.get(env_key, "")
+            return tuple(s.strip() for s in raw.split(",") if s.strip())
+
         database_url = pop_str("database_url", "ATELIER_DATABASE_URL")
         if not database_url:
             raise ConfigError("ATELIER_DATABASE_URL is required")
@@ -116,6 +165,22 @@ class AtelierConfig:
                 "expected one of: none, bearer, stratoclave_cognito"
             )
 
+        agent_backend = pop_str("agent_backend", "ATELIER_AGENT_BACKEND", _DEFAULT_AGENT_BACKEND)
+        if agent_backend not in ("none", "claude_code", "kiro_code", "mock"):
+            raise ConfigError(
+                f"unsupported agent_backend {agent_backend!r}; "
+                "expected one of: none, claude_code, kiro_code, mock"
+            )
+
+        snapshot_resolver = pop_str(
+            "snapshot_resolver", "ATELIER_SNAPSHOT_RESOLVER", _DEFAULT_SNAPSHOT_RESOLVER
+        )
+        if snapshot_resolver not in ("echo", "distill"):
+            raise ConfigError(
+                f"unsupported snapshot_resolver {snapshot_resolver!r}; "
+                "expected one of: echo, distill"
+            )
+
         cfg = cls(
             database_url=database_url,
             host=pop_str("host", "ATELIER_HOST", _DEFAULT_HOST),
@@ -124,6 +189,18 @@ class AtelierConfig:
             auth_mode=cast(AtelierAuthMode, auth_mode),
             bearer_token=pop_optional_str("bearer_token", "ATELIER_BEARER_TOKEN"),
             blob_dir=pop_str("blob_dir", "ATELIER_BLOB_DIR", _DEFAULT_BLOB_DIR),
+            agent_backend=cast(AtelierAgentBackend, agent_backend),
+            agent_cwd=pop_optional_str("agent_cwd", "ATELIER_AGENT_CWD"),
+            agent_allowed_tools=pop_csv("agent_allowed_tools", "ATELIER_AGENT_ALLOWED_TOOLS"),
+            distill_enabled=pop_bool("distill_enabled", "ATELIER_DISTILL_ENABLED", False),
+            distill_database_url=pop_optional_str(
+                "distill_database_url", "ATELIER_DISTILL_DATABASE_URL"
+            ),
+            distill_auto_ingest=pop_bool(
+                "distill_auto_ingest", "ATELIER_DISTILL_AUTO_INGEST", True
+            ),
+            agent_memory_enabled=pop_bool("agent_memory_enabled", "ATELIER_AGENT_MEMORY", True),
+            snapshot_resolver=cast(AtelierSnapshotResolver, snapshot_resolver),
         )
         if overrides:
             unknown = ", ".join(sorted(overrides))
