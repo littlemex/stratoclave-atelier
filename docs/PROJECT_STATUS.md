@@ -1,6 +1,6 @@
 # stratoclave-atelier: Implementation Status
 
-**Last updated**: 2026-05-25
+**Last updated**: 2026-05-26
 **Project started**: 2026-05-25
 
 ## Overall progress
@@ -11,7 +11,7 @@
 |-------|-------|--------|
 | A     | Runnable skeleton: FastAPI app + 5-table schema + docker-compose + `/healthz` | Done |
 | B     | Store layer (Protocol + InMemory + asyncpg), groups + sessions + versions REST | Done |
-| C     | JSONL ingest (WebSocket + SSE), per-turn freeze button backend, blob store | Not started |
+| C     | Content-addressed BlobStore, WebSocket ingest, freeze (whole + range), SSE replay | Done |
 | D     | Cross-session snapshot RPC, fork DAG JSON, distill / loom integration | Not started |
 | E     | UI (fork DAG visualization + per-turn freeze buttons) | Not started |
 
@@ -31,7 +31,22 @@
 | CI workflow | `.github/workflows/ci.yml` | Done |
 | Unit tests | `tests/unit/` | Done |
 
-### What ships in Stage B (this delta)
+### What ships in Stage C (this delta)
+
+| Component | File(s) | State |
+|-----------|---------|-------|
+| `BlobStore` Protocol + `FileBlobStore` (write-once, `chmod 0444`, sha256 fan-out) + `InMemoryBlobStore` | `src/stratoclave_atelier/blobs/store.py` | Done |
+| Freeze pipeline (events -> JSONL -> BlobStore -> Version) | `src/stratoclave_atelier/freeze.py` | Done |
+| `POST /api/sessions/{id}/freeze` (whole session or `start_seq..end_seq` range) | `src/stratoclave_atelier/api/sessions.py` | Done |
+| `WS /api/sessions/{id}/ingest` (one JSONL turn per text frame, ack stream) | `src/stratoclave_atelier/api/ingest.py` | Done |
+| `GET /api/sessions/{id}/events?from_seq=N` (SSE replay) | `src/stratoclave_atelier/api/events.py` | Done |
+| FastAPI lifespan: build `FileBlobStore` rooted at `cfg.blob_dir` | `src/stratoclave_atelier/server.py` | Done |
+| `BlobStoreDep` DI alias | `src/stratoclave_atelier/api/deps.py` | Done |
+| `SessionFreeze` request schema | `src/stratoclave_atelier/api/schemas.py` | Done |
+| Unit tests: `BlobStore`, freeze pipeline, freeze REST, ingest WS, SSE replay (32 new tests) | `tests/unit/test_blob_store.py`, `test_freeze.py`, `test_api_freeze.py`, `test_api_ingest.py`, `test_api_events.py` | Done |
+| Integration test: full freeze pipeline against live Postgres + filesystem | `tests/integration/test_asyncpg_store.py` | Done |
+
+### What ships in Stage B
 
 | Component | File(s) | State |
 |-----------|---------|-------|
@@ -120,15 +135,17 @@ These were excluded by explicit project decision (see `HANDOVER.md`):
 
 | Role    | Owner    | Status   | Current task                   |
 |---------|----------|----------|--------------------------------|
-| Backend | (lead)   | Active   | Stage C: ingest + freeze + blob store |
+| Backend | (lead)   | Active   | Stage D: fork-graph JSON + cross-session snapshot RPC |
 | UI      | -        | Pending  | Awaits Stage D handoff         |
 
 ## Next steps (priority order)
 
-1. **Begin Stage C**: content-addressed blob store under
-   `ATELIER_BLOB_DIR`, write-once with `chmod 0444` after rename.
-2. **WebSocket ingest** that appends turns to a session's event log and
-   spools the JSONL to a temp file.
-3. **Freeze endpoints**: `POST /api/sessions/{id}/freeze` (whole) and
-   per-turn / range freeze backed by the blob store.
-4. **SSE replay**: `GET /api/sessions/{id}/events?from_seq=N`.
+1. **Begin Stage D**: `GET /api/groups/{id}/fork-graph` and
+   `GET /api/sessions/{id}/fork-graph` returning DAG JSON for the UI.
+2. **Cross-session snapshot RPC**:
+   `POST /api/sessions/{id}/snapshot-query` that resolves a frozen
+   version + question and logs the result to `snapshot_queries`.
+3. **stratoclave-distill integration**: optional digest pre-fill on
+   freeze.
+4. **stratoclave-loom integration**: optional "spawn an agent on this
+   version" runtime hook.

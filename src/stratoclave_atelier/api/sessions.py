@@ -8,9 +8,11 @@ Stage B exposes:
 * ``POST /api/sessions/{id}/fork`` -- fork from a frozen version + turn.
 * ``GET  /api/sessions/{id}/versions`` -- list versions for a session.
 
-Freeze (write a Version) lands in Stage C alongside the blob store; for
-now the only way to land Versions is by writing to the database
-directly (e.g. integration tests).
+Stage C adds:
+
+* ``POST /api/sessions/{id}/freeze`` -- freeze a turn range into an
+  immutable :class:`Version` backed by the content-addressed blob
+  store.
 """
 
 from __future__ import annotations
@@ -20,14 +22,21 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, status
 
-from stratoclave_atelier.api.deps import StoreDep, http_conflict, http_not_found
+from stratoclave_atelier.api.deps import (
+    BlobStoreDep,
+    StoreDep,
+    http_conflict,
+    http_not_found,
+)
 from stratoclave_atelier.api.schemas import (
     SessionCreate,
     SessionFork,
+    SessionFreeze,
     SessionRead,
     VersionRead,
 )
 from stratoclave_atelier.core import ConflictError, NotFoundError
+from stratoclave_atelier.freeze import freeze_session
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -95,3 +104,37 @@ async def list_versions(session_id: UUID, store: StoreDep) -> list[VersionRead]:
     except NotFoundError as exc:
         raise http_not_found(exc) from exc
     return [VersionRead.from_domain(v) for v in versions]
+
+
+@router.post(
+    "/{session_id}/freeze",
+    response_model=VersionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def freeze(
+    session_id: UUID,
+    payload: SessionFreeze,
+    store: StoreDep,
+    blob_store: BlobStoreDep,
+) -> VersionRead:
+    """Freeze a turn range into an immutable Version.
+
+    With an empty body the entire session is frozen (Stage C requirement
+    "freeze the whole session"); ``start_seq`` and ``end_seq`` narrow
+    the range for per-turn or "freeze from this turn" semantics.
+    """
+
+    try:
+        version = await freeze_session(
+            store=store,
+            blob_store=blob_store,
+            session_id=session_id,
+            start_seq=payload.start_seq,
+            end_seq=payload.end_seq,
+            label=payload.label,
+        )
+    except NotFoundError as exc:
+        raise http_not_found(exc) from exc
+    except ConflictError as exc:
+        raise http_conflict(exc) from exc
+    return VersionRead.from_domain(version)

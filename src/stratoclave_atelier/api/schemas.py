@@ -129,6 +129,24 @@ class VersionRead(BaseModel):
         )
 
 
+# Freeze -----------------------------------------------------------------------
+
+
+class SessionFreeze(BaseModel):
+    """Freeze a contiguous turn range into an immutable Version.
+
+    Both ``start_seq`` and ``end_seq`` are optional; when omitted the
+    handler interprets them as "from the first turn ever appended" and
+    "up to the latest turn", respectively. ``label`` is a free-form
+    annotation surfaced by the UI ("baseline", "after refactor", ...);
+    it is not used for content addressing.
+    """
+
+    start_seq: int | None = Field(default=None, ge=0)
+    end_seq: int | None = Field(default=None, ge=0)
+    label: str | None = Field(default=None, max_length=200)
+
+
 # Events -----------------------------------------------------------------------
 
 
