@@ -195,3 +195,47 @@ async def test_append_and_replay_events(store: AsyncpgStore) -> None:
 async def test_append_event_unknown_session_raises(store: AsyncpgStore) -> None:
     with pytest.raises(NotFoundError):
         await store.append_event(session_id=uuid4(), kind="turn", payload={})
+
+
+# Stage C end-to-end: freeze pipeline against a real Postgres ----------------
+
+
+async def test_freeze_pipeline_against_real_postgres(
+    store: AsyncpgStore, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Append turns -> freeze -> read back via list_versions.
+
+    Exercises :class:`AsyncpgStore.create_version` from the Stage B
+    surface plus the Stage C blob/freeze pipeline.
+    """
+
+    from stratoclave_atelier.blobs import FileBlobStore
+    from stratoclave_atelier.freeze import freeze_session
+
+    blob_root = tmp_path_factory.mktemp("blobs")
+    blob_store = FileBlobStore(blob_root)
+    session = await store.create_session(title="freeze-it")
+    for i in range(3):
+        await store.append_event(
+            session_id=session.session_id,
+            kind="turn",
+            payload={"role": "user", "i": i},
+        )
+
+    version = await freeze_session(
+        store=store,
+        blob_store=blob_store,
+        session_id=session.session_id,
+        label="full",
+    )
+    assert version.start_seq == 0
+    assert version.end_seq == 2
+    assert version.turn_count == 3
+    assert version.label == "full"
+
+    versions = await store.list_versions(session.session_id)
+    assert [v.version_id for v in versions] == [version.version_id]
+
+    written = await blob_store.read(version.blob_sha)
+    assert written.endswith(b"\n")
+    assert written.count(b"\n") == 3
