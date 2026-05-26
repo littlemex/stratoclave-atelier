@@ -1,6 +1,6 @@
 # stratoclave-atelier: Implementation Status
 
-**Last updated**: 2026-05-27 (Stage G)
+**Last updated**: 2026-05-27 (Stage H)
 **Project started**: 2026-05-25
 
 ## Overall progress
@@ -16,6 +16,22 @@
 | E     | Vanilla JS SPA (4 panels) + static mount + `--in-memory` CLI + walking-skeleton E2E | Done |
 | F     | Per-turn freeze UI + fork dialog + snapshot-query dialog + live-tail SSE + HTTP turn fallback + CLI session subcommands | Done |
 | G     | Real agent loop via stratoclave-loom + cross-session memory via stratoclave-distill + claude-capture-style chat at `/` + legacy panels moved to `/panels` | Done |
+| H     | Per-session backend selection (claude_code / kiro_code / mock) via UI picker, persisted in `sessions.agent_backend`, validated against operator-allowed list | Done |
+
+### What ships in Stage H (this delta)
+
+| Component | File(s) | State |
+|-----------|---------|-------|
+| `sessions.agent_backend TEXT NULL` column with CHECK constraint | `migrations/versions/0002_session_agent_backend.py` | Done |
+| `Session.agent_backend` field + `Store.create_session(agent_backend=)` parameter | `src/stratoclave_atelier/core/types.py`, `src/stratoclave_atelier/db/{store,memory,asyncpg_store}.py` | Done |
+| Per-backend config: `agent_backends_allowed`, `agent_cwd_by_backend`, `agent_allowed_tools_by_backend` + helpers (`cwd_for_backend`, `allowed_tools_for_backend`, `resolved_backends`) | `src/stratoclave_atelier/config.py` | Done |
+| `GET /api/agent/backends` -> `{ backends: [{name, ready, cwd}], default }` | `src/stratoclave_atelier/api/agent.py` | Done |
+| `POST /api/sessions` and `/fork` accept `agent_backend`, validate against allowed list, forks inherit parent | `src/stratoclave_atelier/api/sessions.py`, `api/schemas.py` | Done |
+| `AgentRunner` takes per-session `backend` for warmup; backend cwd/tools picked per call | `src/stratoclave_atelier/agent_runner.py` | Done |
+| Chat backend picker `<select>` in header; locks once a session is warm; unlocks on "New session" | `frontend/static/index.html`, `frontend/static/js/chat.js`, `frontend/static/css/chat.css` | Done |
+| New env vars: `ATELIER_AGENT_BACKENDS_ALLOWED`, `ATELIER_AGENT_CWD_<BACKEND>`, `ATELIER_AGENT_ALLOWED_TOOLS_<BACKEND>` (Stage G singular knobs still work) | `src/stratoclave_atelier/config.py` | Done |
+| Unit tests: config edge cases, `/api/agent/backends`, session create + fork inheritance, AgentRunner backend resolution | `tests/unit/test_config.py`, `tests/unit/test_api_agent.py`, `tests/unit/test_api_sessions.py`, `tests/unit/test_agent_runner.py` | Done |
+| Walkthrough doc | `docs/STAGE_H_WALKTHROUGH.md` | Done |
 
 ### What ships in Stage A
 

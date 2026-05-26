@@ -93,6 +93,7 @@ class InMemoryStore(Store):
         parent_session_id: UUID | None = None,
         parent_version_id: UUID | None = None,
         fork_seq: int | None = None,
+        agent_backend: str | None = None,
     ) -> Session:
         async with self._lock:
             if group_id is not None and group_id not in self._groups:
@@ -112,6 +113,13 @@ class InMemoryStore(Store):
                 if fork_seq < parent_version.start_seq or fork_seq > parent_version.end_seq:
                     raise ConflictError("fork_seq must lie within the parent version's turn range")
 
+            # Forks inherit the parent's backend by default so a
+            # mid-conversation fork never crosses backends silently.
+            if agent_backend is None and parent_session_id is not None:
+                parent_session = self._sessions.get(parent_session_id)
+                if parent_session is not None:
+                    agent_backend = parent_session.agent_backend
+
             now = self._now()
             session = Session(
                 session_id=uuid4(),
@@ -123,6 +131,7 @@ class InMemoryStore(Store):
                 status="active",
                 created_at=now,
                 updated_at=now,
+                agent_backend=agent_backend,
             )
             self._sessions[session.session_id] = session
             self._events[session.session_id] = []
@@ -158,6 +167,7 @@ class InMemoryStore(Store):
                 status=status,
                 created_at=current.created_at,
                 updated_at=self._now(),
+                agent_backend=current.agent_backend,
             )
             self._sessions[session_id] = updated
             return updated

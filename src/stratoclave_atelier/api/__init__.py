@@ -6,6 +6,7 @@ the existing ``sessions`` router. Stage D adds ``fork_graph`` and
 ``snapshot_queries``.
 """
 
+from stratoclave_atelier.api.agent import router as agent_router
 from stratoclave_atelier.api.agent_runs import router as agent_runs_router
 from stratoclave_atelier.api.events import router as events_router
 from stratoclave_atelier.api.fork_graph import router as fork_graph_router
@@ -16,6 +17,7 @@ from stratoclave_atelier.api.sessions import router as sessions_router
 from stratoclave_atelier.api.snapshot_queries import router as snapshot_queries_router
 
 __all__ = [
+    "agent_router",
     "agent_runs_router",
     "events_router",
     "fork_graph_router",

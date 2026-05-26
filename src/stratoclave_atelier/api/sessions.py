@@ -17,13 +17,14 @@ Stage C adds:
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Query, status
 
 from stratoclave_atelier.api.deps import (
     BlobStoreDep,
+    ConfigDep,
     EventBusDep,
     MemoryServiceDep,
     StoreDep,
@@ -45,14 +46,53 @@ from stratoclave_atelier.freeze import freeze_session
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
+def _resolve_backend(cfg: object, requested: str | None) -> str | None:
+    """Validate and resolve the backend a session should run against.
+
+    Returns the value to persist on ``Session.agent_backend``:
+    * ``None`` if the caller did not specify and the server has no
+      default (or if the requested value matches the default).
+    * The validated backend name otherwise.
+
+    Raises :class:`ConflictError` when the requested backend isn't in
+    the operator-allowed list.
+    """
+
+    from stratoclave_atelier.config import AtelierConfig
+
+    config = cast("AtelierConfig", cfg)
+    if requested is None:
+        return None
+    allowed = config.resolved_backends()
+    if not allowed:
+        raise ConflictError(
+            "no agent backends are configured on this server (set ATELIER_AGENT_BACKENDS_ALLOWED)"
+        )
+    if requested not in allowed:
+        raise ConflictError(f"backend {requested!r} is not in the allowed list {list(allowed)}")
+    return requested
+
+
 @router.post(
     "",
     response_model=SessionRead,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_session(payload: SessionCreate, store: StoreDep) -> SessionRead:
+async def create_session(
+    payload: SessionCreate,
+    store: StoreDep,
+    config: ConfigDep,
+) -> SessionRead:
     try:
-        session = await store.create_session(title=payload.title, group_id=payload.group_id)
+        backend = _resolve_backend(config, payload.agent_backend)
+    except ConflictError as exc:
+        raise http_conflict(exc) from exc
+    try:
+        session = await store.create_session(
+            title=payload.title,
+            group_id=payload.group_id,
+            agent_backend=backend,
+        )
     except NotFoundError as exc:
         raise http_not_found(exc) from exc
     return SessionRead.from_domain(session)
@@ -85,7 +125,12 @@ async def fork_session(
     session_id: UUID,
     payload: SessionFork,
     store: StoreDep,
+    config: ConfigDep,
 ) -> SessionRead:
+    try:
+        backend = _resolve_backend(config, payload.agent_backend)
+    except ConflictError as exc:
+        raise http_conflict(exc) from exc
     try:
         child = await store.create_session(
             title=payload.title,
@@ -93,6 +138,7 @@ async def fork_session(
             parent_session_id=session_id,
             parent_version_id=payload.parent_version_id,
             fork_seq=payload.fork_seq,
+            agent_backend=backend,
         )
     except NotFoundError as exc:
         raise http_not_found(exc) from exc

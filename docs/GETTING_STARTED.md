@@ -1,6 +1,6 @@
 # stratoclave-atelier: Getting Started
 
-**Last updated**: 2026-05-27 (Stage G)
+**Last updated**: 2026-05-27 (Stage H)
 **Audience**: New contributors and operators bringing up atelier for the first time.
 
 ## Introduction
@@ -12,16 +12,18 @@ freezes a fork as an immutable, content-addressed version that can be
 referenced from other sessions.
 
 This guide walks through what you need to get atelier running on your
-laptop. Stages A through G are merged: Postgres schema and CRUD
+laptop. Stages A through H are merged: Postgres schema and CRUD
 (A / B), WebSocket ingest plus content-addressed freeze (C), fork-graph
 JSON and cross-session snapshot RPC (D), a vanilla-JS SPA that drives
 the whole loop (E), per-turn freeze + fork dialog + snapshot-query
 dialog + live-tail SSE + HTTP turn fallback + a `session` family of
-CLI subcommands (F), and a real agent loop via stratoclave-loom +
+CLI subcommands (F), a real agent loop via stratoclave-loom +
 cross-session memory via stratoclave-distill + claude-capture-style
-chat at `/` with the legacy 4-panel SPA preserved at `/panels` (G).
-See `PROJECT_STATUS.md` for the up-to-date component matrix and
-`STAGE_G_WALKTHROUGH.md` for the latest walkthrough.
+chat at `/` with the legacy 4-panel SPA preserved at `/panels` (G), and
+per-session backend selection in the chat header so operators can pick
+claude_code / kiro_code / mock per session (H). See
+`PROJECT_STATUS.md` for the up-to-date component matrix and
+`STAGE_H_WALKTHROUGH.md` for the latest walkthrough.
 
 ## Where atelier sits in the 4-OSS series
 
@@ -283,6 +285,34 @@ Either knob set to `false` (or the optional extra missing) demotes
 atelier to `NoopMemoryService`: the boot still succeeds, prompts go
 through unmodified, and the chat does not show the memory badge.
 
+## Stage H: per-session backend selection (optional)
+
+Stage H lets one atelier deployment offer multiple loom backends from
+the chat header. Configure the allowed list and (optionally)
+per-backend cwd / allowed_tools:
+
+```bash
+export ATELIER_AGENT_BACKENDS_ALLOWED="claude_code,kiro_code,mock"
+export ATELIER_AGENT_BACKEND=claude_code        # default if picker is untouched
+export ATELIER_AGENT_CWD="$PWD/.atelier-wk"     # shared default
+
+# Per-backend overrides (optional)
+export ATELIER_AGENT_CWD_KIRO_CODE="$PWD/.atelier-kc"
+export ATELIER_AGENT_ALLOWED_TOOLS_CLAUDE_CODE="shell.run,file.read"
+
+stratoclave-atelier serve
+```
+
+Open `http://localhost:8000/`. The Backend dropdown lists the allowed
+entries; pick one and the next `POST /api/sessions` ships
+`agent_backend` so the choice is persisted on the session row. The
+dropdown locks once a session is warm to prevent mid-stream engine
+swaps; click "New session" to unlock it again. Forks inherit the
+parent session's backend by default.
+
+When `ATELIER_AGENT_BACKENDS_ALLOWED` is empty the Stage G singular
+behaviour applies: `ATELIER_AGENT_BACKEND` is the only allowed entry.
+
 ## Configuration
 
 All knobs are environment variables. Nothing is hard-coded in `src/`.
@@ -298,9 +328,12 @@ All knobs are environment variables. Nothing is hard-coded in `src/`.
 | `ATELIER_BEARER_TOKEN`    | (unset)                           | Required when `ATELIER_AUTH_MODE=bearer`               |
 | `ATELIER_BLOB_DIR`        | `.atelier-blobs`                  | Where frozen JSONL blobs are written                   |
 | `ATELIER_BASE_URL`        | `http://localhost:8000`           | Base URL the CLI `session` subcommands target          |
-| `ATELIER_AGENT_BACKEND`   | `none`                            | Loom backend: `none` / `claude_code` / `kiro_code`     |
-| `ATELIER_AGENT_CWD`       | (unset)                           | Working dir handed to the loom session (required when backend != `none`) |
+| `ATELIER_AGENT_BACKEND`   | `none`                            | Default loom backend: `none` / `claude_code` / `kiro_code` / `mock` |
+| `ATELIER_AGENT_BACKENDS_ALLOWED` | (unset)                    | Stage H: CSV of backends offered by the chat picker    |
+| `ATELIER_AGENT_CWD`       | (unset)                           | Working dir for backends without per-backend override (required when backend != `none`) |
+| `ATELIER_AGENT_CWD_<BACKEND>` | (unset)                       | Stage H: per-backend cwd override (e.g. `ATELIER_AGENT_CWD_KIRO_CODE`) |
 | `ATELIER_AGENT_ALLOWED_TOOLS` | (unset)                       | Comma-separated allowlist passed through to loom       |
+| `ATELIER_AGENT_ALLOWED_TOOLS_<BACKEND>` | (unset)             | Stage H: per-backend allowed_tools override            |
 | `ATELIER_AGENT_MEMORY`    | `true`                            | Per-server toggle for memory retrieval on agent runs   |
 | `ATELIER_DISTILL_ENABLED` | `false`                           | Wire `DistillMemoryService` (requires the `[memory]` extra) |
 | `ATELIER_DISTILL_DATABASE_URL` | (unset)                      | Distill Postgres URL (required when distill is enabled) |

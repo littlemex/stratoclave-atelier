@@ -23,6 +23,15 @@ const state = {
     streamingAssistantEl: null,
     streamingAssistantText: null,
     submitting: false,
+    /**
+     * Stage H: backends advertised by GET /api/agent/backends and the
+     * backend chosen for the *current* session. Once a session is
+     * created the choice is sticky -- the picker is locked until the
+     * user starts a new session.
+     */
+    backends: [],
+    defaultBackend: null,
+    selectedBackend: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -117,21 +126,30 @@ async function ensureSession() {
     if (state.sessionId) {
         return state.sessionId;
     }
-    const session = await api("POST", "/api/sessions", {
-        title: "chat session",
-    });
+    const body = { title: "chat session" };
+    if (state.selectedBackend) {
+        body.agent_backend = state.selectedBackend;
+    }
+    const session = await api("POST", "/api/sessions", body);
     state.sessionId = session.session_id;
-    setSessionLabel(session.session_id);
+    setSessionLabel(session.session_id, session.agent_backend);
     attachEventStream(session.session_id);
     document.getElementById("button-freeze").disabled = false;
+    lockBackendPicker(true);
     return session.session_id;
 }
 
-function setSessionLabel(sessionId) {
+function setSessionLabel(sessionId, backend) {
     const label = document.getElementById("chat-session-label");
-    if (label) {
-        label.textContent = sessionId ? `session: ${shortId(sessionId)}` : "";
+    if (!label) {
+        return;
     }
+    if (!sessionId) {
+        label.textContent = "";
+        return;
+    }
+    const tail = backend ? ` · ${backend}` : "";
+    label.textContent = `session: ${shortId(sessionId)}${tail}`;
 }
 
 function shortId(id) {
@@ -153,7 +171,69 @@ async function startNewSession() {
     }
     document.getElementById("button-freeze").disabled = true;
     setSessionLabel(null);
+    lockBackendPicker(false);
     flash("Started a new session");
+}
+
+// ---------------------------------------------------------------------------
+// Stage H backend picker
+// ---------------------------------------------------------------------------
+
+async function loadBackends() {
+    const select = document.getElementById("chat-backend");
+    if (!select) {
+        return;
+    }
+    let info;
+    try {
+        info = await api("GET", "/api/agent/backends");
+    } catch (err) {
+        select.innerHTML = "";
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "(unavailable)";
+        select.appendChild(opt);
+        select.disabled = true;
+        return;
+    }
+    state.backends = info.backends || [];
+    state.defaultBackend = info.default || null;
+
+    select.innerHTML = "";
+    if (state.backends.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "(none configured)";
+        select.appendChild(opt);
+        select.disabled = true;
+        state.selectedBackend = null;
+        return;
+    }
+    for (const b of state.backends) {
+        const opt = document.createElement("option");
+        opt.value = b.name;
+        const suffix = b.ready ? "" : " (cwd missing)";
+        opt.textContent = `${b.name}${suffix}`;
+        opt.disabled = !b.ready;
+        select.appendChild(opt);
+    }
+    const initial =
+        state.defaultBackend && state.backends.some((b) => b.name === state.defaultBackend)
+            ? state.defaultBackend
+            : state.backends.find((b) => b.ready)?.name || state.backends[0].name;
+    select.value = initial;
+    state.selectedBackend = initial;
+    select.disabled = false;
+    select.addEventListener("change", () => {
+        state.selectedBackend = select.value || null;
+    });
+}
+
+function lockBackendPicker(locked) {
+    const select = document.getElementById("chat-backend");
+    if (select) {
+        select.disabled = locked || state.backends.length === 0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +402,8 @@ function boot() {
                 .dispatchEvent(new Event("submit", { cancelable: true }));
         }
     });
+
+    loadBackends();
 }
 
 boot();

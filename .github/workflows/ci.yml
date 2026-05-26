@@ -33,9 +33,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ./vendor/stratoclave-loom
-      - name: Install vendored stratoclave-distill (not on PyPI)
-        run: |
-          pip install -e ./vendor/stratoclave-distill
 
       - name: Install dependencies
         run: |
@@ -89,9 +86,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ./vendor/stratoclave-loom
-      - name: Install vendored stratoclave-distill (not on PyPI)
-        run: |
-          pip install -e ./vendor/stratoclave-distill
 
       - name: Install dependencies
         run: |

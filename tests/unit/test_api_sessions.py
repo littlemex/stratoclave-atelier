@@ -147,3 +147,114 @@ async def test_append_turn_to_frozen_session_returns_409(
         json={"role": "user", "content": "hello"},
     )
     assert resp.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Stage H: per-session backend selection
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def multi_backend_client(store: InMemoryStore) -> Iterator[TestClient]:
+    cfg = AtelierConfig.from_env(
+        {
+            "ATELIER_DATABASE_URL": "postgresql+asyncpg://a:b@localhost:5432/c",
+            "ATELIER_AGENT_BACKENDS_ALLOWED": "claude_code,kiro_code,mock",
+            "ATELIER_AGENT_CWD": "/tmp/wk",
+            "ATELIER_AGENT_BACKEND": "claude_code",
+        }
+    )
+    app = create_app(cfg, store=store)
+    with TestClient(app) as client:
+        yield client
+
+
+def test_create_session_persists_agent_backend(multi_backend_client: TestClient) -> None:
+    resp = multi_backend_client.post(
+        "/api/sessions",
+        json={"title": "kiro-session", "agent_backend": "kiro_code"},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["agent_backend"] == "kiro_code"
+    detail = multi_backend_client.get(f"/api/sessions/{body['session_id']}").json()
+    assert detail["agent_backend"] == "kiro_code"
+
+
+def test_create_session_without_backend_keeps_none(multi_backend_client: TestClient) -> None:
+    resp = multi_backend_client.post("/api/sessions", json={"title": "default"})
+    assert resp.status_code == 201
+    assert resp.json()["agent_backend"] is None
+
+
+def test_create_session_with_disallowed_backend_returns_409(
+    multi_backend_client: TestClient,
+) -> None:
+    resp = multi_backend_client.post(
+        "/api/sessions",
+        json={"title": "bad", "agent_backend": "wizard"},
+    )
+    assert resp.status_code == 409
+
+
+def test_create_session_when_no_backends_configured_rejects(
+    client: TestClient,
+) -> None:
+    """The default `client` fixture has no backend configured."""
+
+    resp = client.post(
+        "/api/sessions",
+        json={"title": "x", "agent_backend": "claude_code"},
+    )
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_fork_inherits_parent_backend_when_unspecified(
+    multi_backend_client: TestClient, store: InMemoryStore
+) -> None:
+    parent = await store.create_session(title="parent", agent_backend="kiro_code")
+    version = await store.create_version(
+        session_id=parent.session_id,
+        blob_sha="b" * 64,
+        blob_path="x.jsonl",
+        start_seq=0,
+        end_seq=5,
+        byte_size=10,
+    )
+    resp = multi_backend_client.post(
+        f"/api/sessions/{parent.session_id}/fork",
+        json={
+            "title": "child",
+            "parent_version_id": str(version.version_id),
+            "fork_seq": 3,
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()["agent_backend"] == "kiro_code"
+
+
+@pytest.mark.asyncio
+async def test_fork_overrides_parent_backend(
+    multi_backend_client: TestClient, store: InMemoryStore
+) -> None:
+    parent = await store.create_session(title="parent", agent_backend="claude_code")
+    version = await store.create_version(
+        session_id=parent.session_id,
+        blob_sha="c" * 64,
+        blob_path="x.jsonl",
+        start_seq=0,
+        end_seq=5,
+        byte_size=10,
+    )
+    resp = multi_backend_client.post(
+        f"/api/sessions/{parent.session_id}/fork",
+        json={
+            "title": "child",
+            "parent_version_id": str(version.version_id),
+            "fork_seq": 3,
+            "agent_backend": "mock",
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()["agent_backend"] == "mock"

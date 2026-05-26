@@ -195,3 +195,138 @@ def test_agent_memory_can_be_disabled() -> None:
         }
     )
     assert cfg.agent_memory_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Stage H: per-session backend selection + per-backend overrides
+# ---------------------------------------------------------------------------
+
+
+def test_resolved_backends_back_compat_with_singular() -> None:
+    """Stage G env style still works: only ATELIER_AGENT_BACKEND set."""
+
+    cfg = AtelierConfig.from_env(
+        {
+            "ATELIER_DATABASE_URL": _DB,
+            "ATELIER_AGENT_BACKEND": "claude_code",
+            "ATELIER_AGENT_CWD": "/tmp/wk",
+        }
+    )
+    assert cfg.resolved_backends() == ("claude_code",)
+    assert cfg.cwd_for_backend("claude_code") == "/tmp/wk"
+    assert cfg.allowed_tools_for_backend("claude_code") == ()
+
+
+def test_resolved_backends_none_collapses_to_empty() -> None:
+    cfg = AtelierConfig.from_env({"ATELIER_DATABASE_URL": _DB})
+    assert cfg.agent_backend == "none"
+    assert cfg.resolved_backends() == ()
+
+
+def test_agent_backends_allowed_csv_parsing() -> None:
+    cfg = AtelierConfig.from_env(
+        {
+            "ATELIER_DATABASE_URL": _DB,
+            "ATELIER_AGENT_BACKENDS_ALLOWED": " claude_code , kiro_code ",
+            "ATELIER_AGENT_CWD": "/tmp/wk",
+            "ATELIER_AGENT_BACKEND": "claude_code",
+        }
+    )
+    assert cfg.agent_backends_allowed == ("claude_code", "kiro_code")
+    assert cfg.resolved_backends() == ("claude_code", "kiro_code")
+
+
+def test_per_backend_cwd_overrides_default() -> None:
+    cfg = AtelierConfig.from_env(
+        {
+            "ATELIER_DATABASE_URL": _DB,
+            "ATELIER_AGENT_BACKENDS_ALLOWED": "claude_code,kiro_code",
+            "ATELIER_AGENT_CWD": "/tmp/default",
+            "ATELIER_AGENT_CWD_KIRO_CODE": "/tmp/kiro",
+            "ATELIER_AGENT_BACKEND": "claude_code",
+        }
+    )
+    assert cfg.cwd_for_backend("claude_code") == "/tmp/default"
+    assert cfg.cwd_for_backend("kiro_code") == "/tmp/kiro"
+
+
+def test_per_backend_allowed_tools_overrides_default() -> None:
+    cfg = AtelierConfig.from_env(
+        {
+            "ATELIER_DATABASE_URL": _DB,
+            "ATELIER_AGENT_BACKENDS_ALLOWED": "claude_code,kiro_code",
+            "ATELIER_AGENT_CWD": "/tmp/wk",
+            "ATELIER_AGENT_ALLOWED_TOOLS": "shell.run",
+            "ATELIER_AGENT_ALLOWED_TOOLS_KIRO_CODE": "file.read, file.write",
+            "ATELIER_AGENT_BACKEND": "claude_code",
+        }
+    )
+    assert cfg.allowed_tools_for_backend("claude_code") == ("shell.run",)
+    assert cfg.allowed_tools_for_backend("kiro_code") == ("file.read", "file.write")
+
+
+def test_unknown_backend_in_allowed_list_rejected() -> None:
+    with pytest.raises(ConfigError, match="unsupported backend in agent_backends_allowed"):
+        AtelierConfig.from_env(
+            {
+                "ATELIER_DATABASE_URL": _DB,
+                "ATELIER_AGENT_BACKENDS_ALLOWED": "claude_code,wizard",
+                "ATELIER_AGENT_CWD": "/tmp/wk",
+            }
+        )
+
+
+def test_allowed_backend_without_cwd_rejected() -> None:
+    with pytest.raises(ConfigError, match=r"agent_cwd is required for backend 'kiro_code'"):
+        AtelierConfig.from_env(
+            {
+                "ATELIER_DATABASE_URL": _DB,
+                "ATELIER_AGENT_BACKENDS_ALLOWED": "claude_code,kiro_code",
+                "ATELIER_AGENT_CWD_CLAUDE_CODE": "/tmp/cc",
+                # kiro_code has no cwd configured at all -> reject.
+            }
+        )
+
+
+def test_default_backend_must_be_in_allowed_list() -> None:
+    with pytest.raises(ConfigError, match="must appear in agent_backends_allowed"):
+        AtelierConfig.from_env(
+            {
+                "ATELIER_DATABASE_URL": _DB,
+                "ATELIER_AGENT_BACKENDS_ALLOWED": "kiro_code",
+                "ATELIER_AGENT_CWD": "/tmp/wk",
+                "ATELIER_AGENT_BACKEND": "claude_code",
+            }
+        )
+
+
+def test_per_backend_cwd_only_no_default_ok() -> None:
+    """Allowed backends only need *some* cwd -- per-backend is enough."""
+
+    cfg = AtelierConfig.from_env(
+        {
+            "ATELIER_DATABASE_URL": _DB,
+            "ATELIER_AGENT_BACKENDS_ALLOWED": "claude_code,kiro_code",
+            "ATELIER_AGENT_CWD_CLAUDE_CODE": "/tmp/cc",
+            "ATELIER_AGENT_CWD_KIRO_CODE": "/tmp/kc",
+        }
+    )
+    # No default agent_backend: agent_backend defaults to 'none' but the
+    # picker sees both backends.
+    assert cfg.agent_backend == "none"
+    assert cfg.resolved_backends() == ("claude_code", "kiro_code")
+    assert cfg.cwd_for_backend("claude_code") == "/tmp/cc"
+    assert cfg.cwd_for_backend("kiro_code") == "/tmp/kc"
+
+
+def test_per_backend_overrides_via_kwargs() -> None:
+    cfg = AtelierConfig.from_env(
+        {"ATELIER_DATABASE_URL": _DB},
+        agent_backends_allowed=("claude_code", "mock"),
+        agent_cwd_by_backend={"claude_code": "/wk/cc", "mock": "/wk/mock"},
+        agent_allowed_tools_by_backend={"claude_code": ("shell.run",), "mock": "noop.run"},
+    )
+    assert cfg.cwd_for_backend("claude_code") == "/wk/cc"
+    assert cfg.cwd_for_backend("mock") == "/wk/mock"
+    assert cfg.allowed_tools_for_backend("claude_code") == ("shell.run",)
+    assert cfg.allowed_tools_for_backend("mock") == ("noop.run",)

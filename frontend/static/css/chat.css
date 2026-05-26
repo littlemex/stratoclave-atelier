@@ -88,6 +88,29 @@ a:hover {
     cursor: not-allowed;
 }
 
+.chat-backend-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.chat-backend-label select {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 5px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+}
+
+.chat-backend-label select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .chat-nav button:not(:disabled):hover,
 .chat-nav a:hover {
     background: var(--border);
