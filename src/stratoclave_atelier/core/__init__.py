@@ -10,9 +10,13 @@ from stratoclave_atelier.core.errors import (
 from stratoclave_atelier.core.types import (
     Event,
     EventKind,
+    ForkGraphEdge,
+    ForkGraphNode,
+    ForkGraphVersion,
     Group,
     Session,
     SessionStatus,
+    SnapshotQuery,
     Version,
 )
 
@@ -22,10 +26,14 @@ __all__ = [
     "ConflictError",
     "Event",
     "EventKind",
+    "ForkGraphEdge",
+    "ForkGraphNode",
+    "ForkGraphVersion",
     "Group",
     "NotFoundError",
     "SchemaError",
     "Session",
     "SessionStatus",
+    "SnapshotQuery",
     "Version",
 ]

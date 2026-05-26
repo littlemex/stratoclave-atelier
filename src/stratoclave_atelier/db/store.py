@@ -31,6 +31,7 @@ from stratoclave_atelier.core import (
     Group,
     Session,
     SessionStatus,
+    SnapshotQuery,
     Version,
 )
 
@@ -91,3 +92,20 @@ class Store(Protocol):
     async def list_events(self, session_id: UUID, *, from_seq: int = 0) -> list[Event]: ...
 
     async def next_seq(self, session_id: UUID) -> int: ...
+
+    # snapshot queries -------------------------------------------------------
+    async def create_snapshot_query(
+        self,
+        *,
+        source_session_id: UUID,
+        target_version_id: UUID,
+        query: str,
+        response: str | None = None,
+    ) -> SnapshotQuery: ...
+
+    async def list_snapshot_queries(
+        self,
+        *,
+        source_session_id: UUID | None = None,
+        target_version_id: UUID | None = None,
+    ) -> list[SnapshotQuery]: ...
