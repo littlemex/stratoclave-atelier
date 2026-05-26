@@ -29,6 +29,7 @@ from stratoclave_atelier.core import (
     NotFoundError,
     Session,
     SessionStatus,
+    SnapshotQuery,
     Version,
 )
 from stratoclave_atelier.db.store import Store
@@ -367,6 +368,70 @@ class AsyncpgStore(Store):
             ).scalar_one()
         return int(value)
 
+    # snapshot queries -------------------------------------------------------
+    async def create_snapshot_query(
+        self,
+        *,
+        source_session_id: UUID,
+        target_version_id: UUID,
+        query: str,
+        response: str | None = None,
+    ) -> SnapshotQuery:
+        # Validate both parents exist; surface NotFoundError for either.
+        await self.get_session(source_session_id)
+        await self.get_version(target_version_id)
+
+        query_id = uuid4()
+        async with self._engine.begin() as conn:
+            try:
+                row = (
+                    await conn.execute(
+                        text(
+                            "INSERT INTO snapshot_queries ("
+                            " query_id, source_session_id, target_version_id, query, response"
+                            ") VALUES (:qid, :ssid, :tvid, :q, :r) "
+                            "RETURNING query_id, source_session_id, target_version_id,"
+                            " query, response, created_at"
+                        ),
+                        {
+                            "qid": query_id,
+                            "ssid": source_session_id,
+                            "tvid": target_version_id,
+                            "q": query,
+                            "r": response,
+                        },
+                    )
+                ).one()
+            except IntegrityError as exc:
+                raise NotFoundError(str(exc.orig)) from exc
+        return _row_to_snapshot_query(row)
+
+    async def list_snapshot_queries(
+        self,
+        *,
+        source_session_id: UUID | None = None,
+        target_version_id: UUID | None = None,
+    ) -> list[SnapshotQuery]:
+        sql = (
+            "SELECT query_id, source_session_id, target_version_id,"
+            " query, response, created_at "
+            "FROM snapshot_queries"
+        )
+        params: dict[str, Any] = {}
+        clauses: list[str] = []
+        if source_session_id is not None:
+            clauses.append("source_session_id = :ssid")
+            params["ssid"] = source_session_id
+        if target_version_id is not None:
+            clauses.append("target_version_id = :tvid")
+            params["tvid"] = target_version_id
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at"
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(text(sql), params)).all()
+        return [_row_to_snapshot_query(r) for r in rows]
+
     # internals --------------------------------------------------------------
     async def _validate_fork(
         self,
@@ -437,5 +502,16 @@ def _row_to_event(row: Any) -> Event:
         seq=row.seq,
         kind=row.kind,
         payload=payload,
+        created_at=row.created_at,
+    )
+
+
+def _row_to_snapshot_query(row: Any) -> SnapshotQuery:
+    return SnapshotQuery(
+        query_id=row.query_id,
+        source_session_id=row.source_session_id,
+        target_version_id=row.target_version_id,
+        query=row.query,
+        response=row.response,
         created_at=row.created_at,
     )

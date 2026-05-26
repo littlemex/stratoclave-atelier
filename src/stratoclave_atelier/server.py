@@ -17,20 +17,26 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from stratoclave_atelier import __version__
 from stratoclave_atelier.api import (
     events_router,
+    fork_graph_router,
     groups_router,
     health_router,
     ingest_router,
     sessions_router,
+    snapshot_queries_router,
 )
 from stratoclave_atelier.blobs import BlobStore, FileBlobStore
 from stratoclave_atelier.config import AtelierConfig
 from stratoclave_atelier.db import AsyncpgStore, Store, create_engine
+from stratoclave_atelier.snapshot_resolver import EchoSnapshotResolver, SnapshotResolver
 
 
 def create_app(
@@ -38,6 +44,7 @@ def create_app(
     *,
     store: Store | None = None,
     blob_store: BlobStore | None = None,
+    snapshot_resolver: SnapshotResolver | None = None,
 ) -> FastAPI:
     """Build a FastAPI application bound to the given config and store.
 
@@ -58,6 +65,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.blob_store = blob_store or FileBlobStore(cfg.blob_dir)
+        app.state.snapshot_resolver = snapshot_resolver or EchoSnapshotResolver()
         if store is not None:
             app.state.store = store
             yield
@@ -82,7 +90,32 @@ def create_app(
     app.include_router(sessions_router)
     app.include_router(events_router)
     app.include_router(ingest_router)
+    app.include_router(fork_graph_router)
+    app.include_router(snapshot_queries_router)
+    _mount_frontend(app)
     return app
+
+
+def _mount_frontend(app: FastAPI) -> None:
+    """Mount the Stage E SPA at ``/`` and its assets under ``/static``.
+
+    The SPA is a single ``index.html`` plus vanilla JS / CSS shipped
+    from ``frontend/static/``. We resolve the directory relative to the
+    repository root (``__file__`` lives in ``src/stratoclave_atelier``)
+    and skip mounting when the directory does not exist -- e.g. when
+    only the wheel is installed and the frontend was not packaged.
+    """
+
+    package_dir = Path(__file__).resolve().parent
+    repo_root = package_dir.parent.parent
+    static_dir = repo_root / "frontend" / "static"
+    if not static_dir.is_dir():
+        return
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def root() -> FileResponse:
+        return FileResponse(str(static_dir / "index.html"))
 
 
 def _build_module_app() -> FastAPI:

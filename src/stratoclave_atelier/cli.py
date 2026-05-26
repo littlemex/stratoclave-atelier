@@ -32,6 +32,14 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable uvicorn auto-reload (development only).",
     )
+    serve.add_argument(
+        "--in-memory",
+        action="store_true",
+        help=(
+            "Run with the InMemoryStore + InMemoryBlobStore (no Postgres / disk). "
+            "Used for the Stage E walking-skeleton demo and Playwright E2E."
+        ),
+    )
 
     sub.add_parser("migrate", help="Run alembic upgrade head.")
     sub.add_parser("config", help="Print effective configuration as a debug dump.")
@@ -45,13 +53,22 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     cfg = AtelierConfig.from_env()
     host = args.host or cfg.host
     port = args.port or cfg.port
-    uvicorn.run(
-        "stratoclave_atelier.server:app",
-        host=host,
-        port=port,
-        log_level=cfg.log_level,
-        reload=args.reload,
-    )
+    if args.in_memory:
+        from stratoclave_atelier.blobs import InMemoryBlobStore
+        from stratoclave_atelier.db import InMemoryStore
+        from stratoclave_atelier.server import create_app
+
+        os.environ.setdefault("ATELIER_IN_MEMORY", "1")
+        app = create_app(cfg, store=InMemoryStore(), blob_store=InMemoryBlobStore())
+        uvicorn.run(app, host=host, port=port, log_level=cfg.log_level)
+    else:
+        uvicorn.run(
+            "stratoclave_atelier.server:app",
+            host=host,
+            port=port,
+            log_level=cfg.log_level,
+            reload=args.reload,
+        )
     return 0
 
 

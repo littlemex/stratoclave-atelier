@@ -16,6 +16,7 @@ from fastapi import Depends, HTTPException, Request, status
 from stratoclave_atelier.blobs import BlobStore
 from stratoclave_atelier.core import ConflictError, NotFoundError
 from stratoclave_atelier.db import Store
+from stratoclave_atelier.snapshot_resolver import SnapshotResolver
 
 
 def get_store(request: Request) -> Store:
@@ -48,8 +49,25 @@ def get_blob_store(request: Request) -> BlobStore:
     return cast(BlobStore, blob_store)
 
 
+def get_snapshot_resolver(request: Request) -> SnapshotResolver:
+    """Return the :class:`SnapshotResolver` attached to the FastAPI app.
+
+    Production wires :class:`EchoSnapshotResolver` by default; tests can
+    inject a stub that records resolve() calls.
+    """
+
+    resolver = getattr(request.app.state, "snapshot_resolver", None)
+    if resolver is None:  # pragma: no cover -- developer error if hit
+        raise RuntimeError(
+            "SnapshotResolver is not configured on app.state.snapshot_resolver; "
+            "build the app via create_app() so the lifespan can attach one"
+        )
+    return cast(SnapshotResolver, resolver)
+
+
 StoreDep = Annotated[Store, Depends(get_store)]
 BlobStoreDep = Annotated[BlobStore, Depends(get_blob_store)]
+SnapshotResolverDep = Annotated[SnapshotResolver, Depends(get_snapshot_resolver)]
 
 
 def http_not_found(error: NotFoundError) -> HTTPException:

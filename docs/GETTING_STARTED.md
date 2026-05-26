@@ -1,6 +1,6 @@
 # stratoclave-atelier: Getting Started
 
-**Last updated**: 2026-05-25
+**Last updated**: 2026-05-26
 **Audience**: New contributors and operators bringing up atelier for the first time.
 
 ## Introduction
@@ -12,12 +12,12 @@ freezes a fork as an immutable, content-addressed version that can be
 referenced from other sessions.
 
 This guide walks through what you need to get atelier running on your
-laptop. Stage A shipped a runnable scaffold (FastAPI app, five-table
-Postgres schema, docker-compose, `/healthz`); **Stage B** adds the
-`Store` Protocol with in-memory and asyncpg implementations and exposes
-the first batch of REST endpoints under `/api/groups` and
-`/api/sessions` (including fork). Freeze + JSONL ingest land in Stage C
-(see `PROJECT_STATUS.md`).
+laptop. Stages A through E are merged: Postgres schema and CRUD
+(A / B), WebSocket ingest plus content-addressed freeze (C), fork-graph
+JSON and cross-session snapshot RPC (D), and a vanilla-JS SPA that
+drives the whole loop (E). See `PROJECT_STATUS.md` for the up-to-date
+component matrix and `STAGE_D_E_WALKTHROUGH.md` for the latest
+walkthrough.
 
 ## Where atelier sits in the 4-OSS series
 
@@ -125,10 +125,39 @@ curl -s -X POST localhost:8000/api/sessions/<parent_id>/fork \
 curl -s localhost:8000/api/sessions/<session_id>/versions
 ```
 
-Versions are not yet writable through HTTP -- Stage C adds the freeze
-endpoint backed by the content-addressed JSONL blob store. For now the
-only way to land Versions is to insert them directly via the
-`AsyncpgStore` (e.g. from a script or integration test).
+Versions are written through `POST /api/sessions/{id}/freeze` (Stage
+C) and the WebSocket at `/api/sessions/{id}/ingest` is the canonical
+path for appending turns. Stage D adds two more shapes:
+
+```bash
+# Group-level fork DAG (nodes + edges JSON for the UI).
+curl -s localhost:8000/api/groups/<group_id>/fork-graph
+
+# Cross-session snapshot RPC: resolve a frozen version + question into
+# a synchronous answer (logged to snapshot_queries).
+curl -s -X POST localhost:8000/api/sessions/<source_session_id>/snapshot-query \
+  -H 'content-type: application/json' \
+  -d '{"target_version_id": "<version_id>", "query": "What did the user say?"}'
+```
+
+The default deployment ships `EchoSnapshotResolver` so the walking
+skeleton is reproducible without an LLM. Production replaces it via
+the `snapshot_resolver` kwarg to `create_app()`.
+
+## Stage E: vanilla JS SPA
+
+The `frontend/static/` SPA is mounted at `/` and drives the whole
+ingest -> freeze -> snapshot loop end-to-end. To bring up the walking
+skeleton without Postgres, use the `--in-memory` flag:
+
+```bash
+stratoclave-atelier serve --in-memory --port 8123
+# then open http://localhost:8123/ in a browser
+```
+
+The four panels are: groups, sessions filtered by the active group,
+turns + versions for the active session, and the SVG fork graph. See
+`docs/STAGE_D_E_WALKTHROUGH.md` for the manual Playwright journey.
 
 ## Configuration
 
@@ -193,6 +222,8 @@ mypy src/stratoclave_atelier
 
 - Read `PROJECT_STATUS.md` for the live roadmap.
 - Read `PROJECT_RULES.md` before opening your first PR.
-- Stage B will introduce the in-memory `Store` + asyncpg `Store`, the
-  groups / sessions / versions REST endpoints, and the JSONL ingest
-  WebSocket.
+- Read `STAGE_D_E_WALKTHROUGH.md` for the deep dive on fork-graph,
+  snapshot-query, and the SPA.
+- The walking skeleton is feature-complete; remaining work is polish
+  (live-tail SSE, per-turn freeze button, real LLM resolver, auth
+  wiring). See "Next steps" in `PROJECT_STATUS.md`.

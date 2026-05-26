@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>stratoclave-atelier</title>
+    <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+    <header>
+        <h1>stratoclave-atelier</h1>
+        <p class="subtitle">workshop for agent sessions</p>
+    </header>
+    <main>
+        <section class="panel" id="panel-groups">
+            <h2>Groups</h2>
+            <form id="form-create-group" class="row">
+                <input
+                    type="text"
+                    name="name"
+                    placeholder="group name"
+                    required
+                    minlength="1"
+                    maxlength="200"
+                    data-testid="group-name-input"
+                />
+                <button type="submit" data-testid="group-create-button">Create</button>
+            </form>
+            <ul id="list-groups" class="list" data-testid="groups-list"></ul>
+        </section>
+
+        <section class="panel" id="panel-sessions">
+            <h2>Sessions <span id="active-group-label" class="muted"></span></h2>
+            <form id="form-create-session" class="row">
+                <input
+                    type="text"
+                    name="title"
+                    placeholder="session title"
+                    required
+                    minlength="1"
+                    maxlength="200"
+                    data-testid="session-title-input"
+                />
+                <button type="submit" data-testid="session-create-button">Create</button>
+            </form>
+            <ul id="list-sessions" class="list" data-testid="sessions-list"></ul>
+        </section>
+
+        <section class="panel" id="panel-timeline">
+            <h2>Turns <span id="active-session-label" class="muted"></span></h2>
+            <form id="form-send-turn" class="row" hidden>
+                <input
+                    type="text"
+                    name="role"
+                    placeholder="role (user / assistant)"
+                    value="user"
+                    required
+                    data-testid="turn-role-input"
+                />
+                <input
+                    type="text"
+                    name="content"
+                    placeholder="turn content"
+                    required
+                    data-testid="turn-content-input"
+                />
+                <button type="submit" data-testid="turn-send-button">Send</button>
+            </form>
+            <button
+                id="button-freeze"
+                type="button"
+                hidden
+                data-testid="freeze-button"
+            >
+                Freeze whole session
+            </button>
+            <ol id="list-turns" class="timeline" data-testid="turns-list"></ol>
+            <h3>Versions</h3>
+            <ul id="list-versions" class="list" data-testid="versions-list"></ul>
+        </section>
+
+        <section class="panel" id="panel-graph">
+            <h2>Fork graph <span id="active-graph-label" class="muted"></span></h2>
+            <svg
+                id="fork-graph-svg"
+                viewBox="0 0 800 400"
+                preserveAspectRatio="xMidYMid meet"
+                data-testid="fork-graph-svg"
+            ></svg>
+        </section>
+    </main>
+    <div id="status-bar" class="status" data-testid="status-bar" aria-live="polite"></div>
+    <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

@@ -32,6 +32,7 @@ from stratoclave_atelier.core import (
     NotFoundError,
     Session,
     SessionStatus,
+    SnapshotQuery,
     Version,
 )
 from stratoclave_atelier.db.store import Store
@@ -52,6 +53,7 @@ class InMemoryStore(Store):
         self._versions: dict[UUID, Version] = {}
         self._events: dict[UUID, list[Event]] = {}
         self._next_seq: dict[UUID, int] = {}
+        self._snapshot_queries: dict[UUID, SnapshotQuery] = {}
 
     @staticmethod
     def _now() -> datetime:
@@ -246,3 +248,43 @@ class InMemoryStore(Store):
             if session_id not in self._sessions:
                 raise NotFoundError(f"session {session_id} not found")
             return self._next_seq[session_id]
+
+    # snapshot queries -------------------------------------------------------
+    async def create_snapshot_query(
+        self,
+        *,
+        source_session_id: UUID,
+        target_version_id: UUID,
+        query: str,
+        response: str | None = None,
+    ) -> SnapshotQuery:
+        async with self._lock:
+            if source_session_id not in self._sessions:
+                raise NotFoundError(f"session {source_session_id} not found")
+            if target_version_id not in self._versions:
+                raise NotFoundError(f"version {target_version_id} not found")
+
+            row = SnapshotQuery(
+                query_id=uuid4(),
+                source_session_id=source_session_id,
+                target_version_id=target_version_id,
+                query=query,
+                response=response,
+                created_at=self._now(),
+            )
+            self._snapshot_queries[row.query_id] = row
+            return row
+
+    async def list_snapshot_queries(
+        self,
+        *,
+        source_session_id: UUID | None = None,
+        target_version_id: UUID | None = None,
+    ) -> list[SnapshotQuery]:
+        async with self._lock:
+            rows = list(self._snapshot_queries.values())
+            if source_session_id is not None:
+                rows = [r for r in rows if r.source_session_id == source_session_id]
+            if target_version_id is not None:
+                rows = [r for r in rows if r.target_version_id == target_version_id]
+            return sorted(rows, key=lambda r: r.created_at)

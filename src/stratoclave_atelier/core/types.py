@@ -89,3 +89,67 @@ class Event:
     kind: EventKind
     payload: dict[str, Any]
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotQuery:
+    """Audit row for a cross-session question against a frozen Version.
+
+    Every Stage D ``snapshot-query`` request is recorded synchronously so
+    operators can later answer "which sessions referenced this frozen
+    version?". ``response`` carries the resolver's answer (an LLM digest
+    in production, an echo of the query in the default in-process
+    resolver used for tests and the stand-alone walking skeleton).
+    """
+
+    query_id: UUID
+    source_session_id: UUID
+    target_version_id: UUID
+    query: str
+    response: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ForkGraphVersion:
+    """A version reference embedded inside :class:`ForkGraphNode`."""
+
+    version_id: UUID
+    label: str | None
+    start_seq: int
+    end_seq: int
+    turn_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ForkGraphNode:
+    """One node in the fork DAG visualised by Stage E.
+
+    ``frozen`` flags whether the node corresponds to a frozen version
+    (we render those with a different stroke). ``parent_version_id`` is
+    the version this session was forked from (``None`` for root
+    sessions), and ``fork_seq`` is the turn at which the fork was taken.
+    """
+
+    session_id: UUID
+    title: str
+    status: SessionStatus
+    parent_session_id: UUID | None
+    parent_version_id: UUID | None
+    fork_seq: int | None
+    versions: tuple[ForkGraphVersion, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ForkGraphEdge:
+    """A parent->child edge in the fork DAG.
+
+    ``via_version_id`` is the version that the child was forked from;
+    the edge therefore carries enough information to render
+    "forked from <version label> at turn N".
+    """
+
+    parent_session_id: UUID
+    child_session_id: UUID
+    via_version_id: UUID
+    fork_seq: int

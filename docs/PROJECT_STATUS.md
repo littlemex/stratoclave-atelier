@@ -12,8 +12,8 @@
 | A     | Runnable skeleton: FastAPI app + 5-table schema + docker-compose + `/healthz` | Done |
 | B     | Store layer (Protocol + InMemory + asyncpg), groups + sessions + versions REST | Done |
 | C     | Content-addressed BlobStore, WebSocket ingest, freeze (whole + range), SSE replay | Done |
-| D     | Cross-session snapshot RPC, fork DAG JSON, distill / loom integration | Not started |
-| E     | UI (fork DAG visualization + per-turn freeze buttons) | Not started |
+| D     | Fork-graph JSON + cross-session snapshot RPC + Echo resolver | Done |
+| E     | Vanilla JS SPA (4 panels) + static mount + `--in-memory` CLI + walking-skeleton E2E | Done |
 
 ### What ships in Stage A
 
@@ -31,7 +31,24 @@
 | CI workflow | `.github/workflows/ci.yml` | Done |
 | Unit tests | `tests/unit/` | Done |
 
-### What ships in Stage C (this delta)
+### What ships in Stages D + E (this delta)
+
+| Component | File(s) | State |
+|-----------|---------|-------|
+| `fork_graph.build_fork_graph` pure helper | `src/stratoclave_atelier/fork_graph.py` | Done |
+| `GET /api/groups/{id}/fork-graph` and `GET /api/sessions/{id}/fork-graph` | `src/stratoclave_atelier/api/fork_graph.py` | Done |
+| `SnapshotResolver` Protocol + `EchoSnapshotResolver` (default wiring) | `src/stratoclave_atelier/snapshot_resolver.py` | Done |
+| `POST /api/sessions/{id}/snapshot-query` and `GET /api/snapshot-queries` | `src/stratoclave_atelier/api/snapshot_queries.py` | Done |
+| `InMemoryStore.create_snapshot_query` / `list_snapshot_queries` | `src/stratoclave_atelier/db/memory.py` | Done |
+| `AsyncpgStore.create_snapshot_query` / `list_snapshot_queries` (raw SQL via asyncpg) | `src/stratoclave_atelier/db/asyncpg_store.py` | Done |
+| Pydantic schemas: `ForkGraph*Read`, `SnapshotQueryCreate`, `SnapshotQueryRead` | `src/stratoclave_atelier/api/schemas.py` | Done |
+| Vanilla JS SPA (4-panel: groups / sessions / turns / fork graph) | `frontend/static/index.html`, `frontend/static/css/app.css`, `frontend/static/js/app.js` | Done |
+| Static mount (`/static/*`) + index handler (`/`) | `src/stratoclave_atelier/server.py::_mount_frontend` | Done |
+| `--in-memory` CLI flag for walking-skeleton demo | `src/stratoclave_atelier/cli.py` | Done |
+| Unit tests (5 new files): fork-graph helper + REST + snapshot-query + Echo + frontend mount | `tests/unit/test_fork_graph.py`, `test_api_fork_graph.py`, `test_api_snapshot_queries.py`, `test_snapshot_resolver.py`, `test_frontend_mount.py` | Done |
+| Walkthrough doc + walking-skeleton screenshot | `docs/STAGE_D_E_WALKTHROUGH.md`, `docs/assets/stage_e_walking_skeleton.png` | Done |
+
+### What ships in Stage C
 
 | Component | File(s) | State |
 |-----------|---------|-------|
@@ -135,17 +152,20 @@ These were excluded by explicit project decision (see `HANDOVER.md`):
 
 | Role    | Owner    | Status   | Current task                   |
 |---------|----------|----------|--------------------------------|
-| Backend | (lead)   | Active   | Stage D: fork-graph JSON + cross-session snapshot RPC |
-| UI      | -        | Pending  | Awaits Stage D handoff         |
+| Backend | (lead)   | Active   | Stage D + E: docs + push via S3+EC2 |
+| UI      | (lead)   | Active   | Walking-skeleton SPA shipped; awaiting per-turn freeze + auth |
 
 ## Next steps (priority order)
 
-1. **Begin Stage D**: `GET /api/groups/{id}/fork-graph` and
-   `GET /api/sessions/{id}/fork-graph` returning DAG JSON for the UI.
-2. **Cross-session snapshot RPC**:
-   `POST /api/sessions/{id}/snapshot-query` that resolves a frozen
-   version + question and logs the result to `snapshot_queries`.
-3. **stratoclave-distill integration**: optional digest pre-fill on
-   freeze.
-4. **stratoclave-loom integration**: optional "spawn an agent on this
-   version" runtime hook.
+1. **Live-tail SSE in the SPA**: convert `loadTimeline` from one-shot
+   fetch to `EventSource`, plumbing `Last-Event-ID` for resume.
+2. **Per-turn freeze button**: shift+click on a turn row triggers
+   `POST /api/sessions/{id}/freeze` with an explicit `start_seq` and
+   `end_seq`; render the resulting Version next to the timeline row.
+3. **stratoclave-distill integration**: replace `EchoSnapshotResolver`
+   with a real distill-backed resolver so snapshot-query can answer
+   semantic questions.
+4. **stratoclave-loom integration**: "spawn an agent on this version"
+   button next to each frozen Version row.
+5. **Auth wiring**: bearer token / Cognito mode end-to-end through the
+   SPA (currently relies on `ATELIER_AUTH_MODE=none`).
