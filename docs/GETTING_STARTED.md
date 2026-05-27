@@ -1,6 +1,6 @@
 # stratoclave-atelier: Getting Started
 
-**Last updated**: 2026-05-27 (Stage J)
+**Last updated**: 2026-05-27 (Stage K)
 **Audience**: New contributors and operators bringing up atelier for the first time.
 
 ## Introduction
@@ -26,9 +26,12 @@ claude_code / kiro_code / mock per session (H), a real
 chat-side branching: `POST /api/sessions/{id}/branch` orchestrator,
 `AutoNamer` (Loom / Noop), header `Fork now` button, per-turn hover
 `Branch from here`, breadcrumb, right-side SVG fork DAG, and
-localStorage edge memos (J). See `PROJECT_STATUS.md` for the
-up-to-date component matrix and `STAGE_J_WALKTHROUGH.md` for the
-latest walkthrough.
+localStorage edge memos (J), and cross-session @ mention with distill
+scope filtering, `POST /api/memory/{query,adopt}`, raw event search
+fallback, and a chat-side mention dialog plus an adopted-memory chip
+above the input box (K). See `PROJECT_STATUS.md` for the up-to-date
+component matrix and `STAGE_K_WALKTHROUGH.md` for the latest
+walkthrough.
 
 ## Where atelier sits in the 4-OSS series
 
@@ -373,6 +376,67 @@ sidebar) are stored client-side in `localStorage` under the key
 `atelier:fork-edge-memos`. They travel with the browser, not the
 workspace; promoting them to a server-side table is on the roadmap.
 
+## Stage K: cross-session @ mention + adopt-for-next-turn
+
+Stage K closes the cross-session reference gap. Distill (Stage G) has
+been ingesting every freeze and the fork DAG (Stage J) keeps lineage
+visible -- Stage K lets the operator pull a learning from a *different*
+session into the live conversation without leaving the chat shell.
+
+The chat header gains an `@ session` button. Click it and a dialog
+opens with two tabs:
+
+- **Distilled (B)** -- scoped retrieval against
+  `stratoclave-distill`. Pick zero-or-more atelier sessions in the
+  multi-select to restrict the search; leaving it empty means "all
+  sessions". The response is rendered as a markdown-ish memory block.
+  When `ATELIER_DISTILL_ENABLED=false`, the pane shows a hint to
+  switch to the Raw events tab.
+- **Raw events (A)** -- per-session substring search via
+  `GET /api/sessions/{id}/events/search?q=...&kind=turn`. Useful when
+  distill is disabled or when the operator wants the verbatim turn
+  rather than a distilled rule.
+
+After previewing the result the user clicks `Adopt for next turn`.
+The block is queued in `AgentRunner._pending_memory[session_id]` and
+spliced as a `<memory>` segment into the very next agent run --
+*regardless* of `ATELIER_AGENT_MEMORY`. While the block is pending a
+chip appears above the textarea ("Memory queued: ..."); click `×` to
+clear it. Re-adopting overwrites; an agent run consumes; the queue is
+in-process and does not survive a restart.
+
+The same surface is callable directly:
+
+```bash
+# Path B: scoped distill retrieval.
+curl -s -X POST localhost:8000/api/memory/query \
+  -H 'content-type: application/json' \
+  -d '{"query": "how did we tune Postgres?", "session_ids": ["<sid_a>", "<sid_b>"]}'
+
+# Adopt the result onto the next run for a specific atelier session.
+curl -s -X POST localhost:8000/api/memory/adopt \
+  -H 'content-type: application/json' \
+  -d '{"session_id": "<atelier_sid>", "memory_block": "[canonical] ..."}'
+
+# Peek what's queued (used by the SPA chip).
+curl -s localhost:8000/api/memory/adopt/<atelier_sid>
+
+# Clear without consuming.
+curl -s -X DELETE localhost:8000/api/memory/adopt/<atelier_sid>
+
+# Path A: per-session raw event substring fallback.
+curl -s "localhost:8000/api/sessions/<target_sid>/events/search?q=work_mem&kind=turn&limit=10"
+```
+
+User-turn payloads now carry a `memory_source` field (`"explicit"` /
+`"adopted"` / `"auto"` / `null`) so freeze + replay record *why* a
+memory block was on a turn. `POST /api/memory/adopt` rejects with 409
+when the target session is already `frozen` / `archived` (no future
+run will consume the block) and 404 when the session is unknown.
+
+No new env vars in Stage K; the feature reuses `ATELIER_DISTILL_*`
+from Stage G.
+
 ## Configuration
 
 All knobs are environment variables. Nothing is hard-coded in `src/`.
@@ -466,6 +530,11 @@ mypy src/stratoclave_atelier
   (Loom / Noop), the chat header `Fork now`, the per-turn hover
   affordance, the breadcrumb, the right-side SVG fork DAG, and the
   localStorage edge memos.
+- Read `STAGE_K_WALKTHROUGH.md` for the deep dive on cross-session
+  @ mention: distill `scope_session_ids` plumbing,
+  `POST /api/memory/{query,adopt}`, the per-session raw event search
+  fallback, the AgentRunner pending-memory queue, and the chat
+  `@ session` dialog plus the adopted-memory chip above the textarea.
 - Remaining work is end-to-end auth wiring, panels-side memory
   ingestion observability, an optional LLM-backed snapshot resolver,
   promoting Stage J edge memos from `localStorage` to a server-side

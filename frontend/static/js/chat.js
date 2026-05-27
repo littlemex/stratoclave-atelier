@@ -49,6 +49,16 @@ const state = {
     pendingMemoEdge: null,
     /** Map of "<parent>:<child>" -> memo string, mirrored to localStorage. */
     edgeMemos: loadEdgeMemos(),
+    /**
+     * Stage K: latest preview text rendered into ``#mention-results``. The
+     * Adopt button reuses this string; ``null`` means "no preview yet, do
+     * not enable Adopt".
+     */
+    mentionPreview: null,
+    /** Stage K: ``"distill"`` or ``"raw"``, drives tab visibility. */
+    mentionTab: "distill",
+    /** Stage K: cached distill enablement (last ``/api/memory/query`` response). */
+    mentionDistillEnabled: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -178,7 +188,12 @@ async function setActiveSession(session, { pushHistory = false } = {}) {
     setSessionLabel(session.session_id, session.agent_backend);
     document.getElementById("button-freeze").disabled = false;
     document.getElementById("button-branch").disabled = false;
+    const mentionBtn = document.getElementById("button-mention");
+    if (mentionBtn) {
+        mentionBtn.disabled = false;
+    }
     lockBackendPicker(true);
+    refreshMemoryChip().catch(() => {});
 
     if (pushHistory) {
         const url = new URL(window.location.href);
@@ -294,6 +309,11 @@ async function startNewSession() {
     }
     document.getElementById("button-freeze").disabled = true;
     document.getElementById("button-branch").disabled = true;
+    const mentionBtn = document.getElementById("button-mention");
+    if (mentionBtn) {
+        mentionBtn.disabled = true;
+    }
+    hideMemoryChip();
     setSessionLabel(null);
     lockBackendPicker(false);
     const url = new URL(window.location.href);
@@ -1155,6 +1175,276 @@ function applyDagPaneWidth(px) {
 }
 
 // ---------------------------------------------------------------------------
+// Stage K: cross-session @ mention panel + adopted memory chip
+// ---------------------------------------------------------------------------
+
+function setMentionTab(tab) {
+    state.mentionTab = tab;
+    const distillTab = document.getElementById("mention-tab-distill");
+    const rawTab = document.getElementById("mention-tab-raw");
+    const distillPane = document.getElementById("mention-pane-distill");
+    const rawPane = document.getElementById("mention-pane-raw");
+    if (!distillTab || !rawTab || !distillPane || !rawPane) {
+        return;
+    }
+    if (tab === "distill") {
+        distillTab.classList.add("is-active");
+        distillTab.setAttribute("aria-selected", "true");
+        rawTab.classList.remove("is-active");
+        rawTab.setAttribute("aria-selected", "false");
+        distillPane.removeAttribute("hidden");
+        rawPane.setAttribute("hidden", "");
+    } else {
+        rawTab.classList.add("is-active");
+        rawTab.setAttribute("aria-selected", "true");
+        distillTab.classList.remove("is-active");
+        distillTab.setAttribute("aria-selected", "false");
+        rawPane.removeAttribute("hidden");
+        distillPane.setAttribute("hidden", "");
+    }
+}
+
+function clearMentionPreview(message = "") {
+    const results = document.getElementById("mention-results");
+    if (results) {
+        results.textContent = message;
+    }
+    state.mentionPreview = null;
+    const adoptBtn = document.getElementById("mention-adopt");
+    if (adoptBtn) {
+        adoptBtn.disabled = true;
+    }
+}
+
+function setMentionPreview(text) {
+    const results = document.getElementById("mention-results");
+    state.mentionPreview = text || null;
+    if (results) {
+        results.textContent = text || "(no results)";
+    }
+    const adoptBtn = document.getElementById("mention-adopt");
+    if (adoptBtn) {
+        adoptBtn.disabled = !state.mentionPreview;
+    }
+}
+
+async function populateMentionSessionSelectors() {
+    const distillSelect = document.getElementById("mention-distill-sessions");
+    const rawSelect = document.getElementById("mention-raw-session");
+    if (!distillSelect || !rawSelect) {
+        return;
+    }
+    let sessions;
+    try {
+        sessions = await api("GET", "/api/sessions");
+    } catch (err) {
+        sessions = [];
+    }
+    for (const s of sessions) {
+        if (!state.sessionsCache.has(s.session_id)) {
+            state.sessionsCache.set(s.session_id, s);
+        }
+    }
+    const others = sessions.filter((s) => s.session_id !== state.sessionId);
+    distillSelect.innerHTML = "";
+    rawSelect.innerHTML = "";
+    if (others.length === 0) {
+        const empty = document.createElement("option");
+        empty.value = "";
+        empty.disabled = true;
+        empty.textContent = "(no other sessions)";
+        distillSelect.appendChild(empty.cloneNode(true));
+        rawSelect.appendChild(empty);
+        return;
+    }
+    for (const s of others) {
+        const label = `${s.title || shortId(s.session_id)} · ${shortId(s.session_id)}`;
+        const o1 = document.createElement("option");
+        o1.value = s.session_id;
+        o1.textContent = label;
+        distillSelect.appendChild(o1);
+        const o2 = document.createElement("option");
+        o2.value = s.session_id;
+        o2.textContent = label;
+        rawSelect.appendChild(o2);
+    }
+}
+
+async function openMentionPanel() {
+    if (!state.sessionId) {
+        return;
+    }
+    const dlg = document.getElementById("mention-panel");
+    if (!dlg) {
+        return;
+    }
+    setMentionTab("distill");
+    clearMentionPreview("");
+    document.getElementById("mention-distill-query").value = "";
+    document.getElementById("mention-raw-query").value = "";
+    await populateMentionSessionSelectors();
+    if (typeof dlg.showModal === "function") {
+        dlg.showModal();
+    } else {
+        dlg.setAttribute("open", "");
+    }
+}
+
+function closeMentionPanel() {
+    closeDialog(document.getElementById("mention-panel"));
+}
+
+async function runDistillSearch() {
+    const queryEl = document.getElementById("mention-distill-query");
+    const select = document.getElementById("mention-distill-sessions");
+    const disabledHint = document.getElementById("mention-distill-disabled");
+    const query = (queryEl?.value || "").trim();
+    if (!query) {
+        clearMentionPreview("Enter a query to search.");
+        return;
+    }
+    const sessionIds = select
+        ? Array.from(select.selectedOptions).map((o) => o.value).filter(Boolean)
+        : [];
+    const body = { query };
+    if (sessionIds.length > 0) {
+        body.session_ids = sessionIds;
+    }
+    clearMentionPreview("Searching...");
+    try {
+        const resp = await api("POST", "/api/memory/query", body);
+        state.mentionDistillEnabled = resp.enabled === true;
+        if (!resp.enabled) {
+            if (disabledHint) {
+                disabledHint.removeAttribute("hidden");
+            }
+            clearMentionPreview(
+                "Memory disabled on this server -- switch to Raw events.",
+            );
+            return;
+        }
+        if (disabledHint) {
+            disabledHint.setAttribute("hidden", "");
+        }
+        if (!resp.memory_block) {
+            clearMentionPreview("No matches.");
+            return;
+        }
+        setMentionPreview(resp.memory_block);
+    } catch (err) {
+        clearMentionPreview(`Search failed: ${err.message || err}`);
+    }
+}
+
+async function runRawSearch() {
+    const queryEl = document.getElementById("mention-raw-query");
+    const select = document.getElementById("mention-raw-session");
+    const query = (queryEl?.value || "").trim();
+    const targetId = select?.value || "";
+    if (!query) {
+        clearMentionPreview("Enter a query to search.");
+        return;
+    }
+    if (!targetId) {
+        clearMentionPreview("Select a target session.");
+        return;
+    }
+    clearMentionPreview("Searching...");
+    try {
+        const url = `/api/sessions/${targetId}/events/search?q=${encodeURIComponent(
+            query,
+        )}&kind=turn&limit=10`;
+        const resp = await api("GET", url);
+        const matches = resp.matches || [];
+        if (matches.length === 0) {
+            clearMentionPreview("No matches.");
+            return;
+        }
+        const target = state.sessionsCache.get(targetId);
+        const header = `[raw events] ${target?.title || shortId(targetId)} · query: "${query}"`;
+        const blocks = matches.map((m) => {
+            const role = m.payload?.role || m.kind || "?";
+            const content =
+                typeof m.payload?.content === "string"
+                    ? m.payload.content
+                    : JSON.stringify(m.payload, null, 2);
+            return `--- seq ${m.seq} (${role}) ---\n${content}`;
+        });
+        const text = `${header}\n\n${blocks.join("\n\n")}`;
+        setMentionPreview(text);
+    } catch (err) {
+        clearMentionPreview(`Search failed: ${err.message || err}`);
+    }
+}
+
+async function adoptMentionPreview() {
+    if (!state.sessionId || !state.mentionPreview) {
+        return;
+    }
+    try {
+        await api("POST", "/api/memory/adopt", {
+            session_id: state.sessionId,
+            memory_block: state.mentionPreview,
+        });
+        renderMemoryChip(state.mentionPreview);
+        flash("Memory adopted for next turn");
+        closeMentionPanel();
+    } catch (err) {
+        flash(`Adopt failed: ${err.message || err}`);
+    }
+}
+
+function renderMemoryChip(block) {
+    const chip = document.getElementById("memory-chip");
+    const label = document.querySelector("[data-testid='memory-chip-label']");
+    if (!chip || !label) {
+        return;
+    }
+    const collapsed = (block || "").replace(/\s+/g, " ").trim();
+    const preview = collapsed.length > 80 ? `${collapsed.slice(0, 80)}…` : collapsed;
+    label.textContent = `Memory queued: ${preview || "(empty)"}`;
+    chip.removeAttribute("hidden");
+}
+
+function hideMemoryChip() {
+    const chip = document.getElementById("memory-chip");
+    if (chip) {
+        chip.setAttribute("hidden", "");
+    }
+}
+
+async function refreshMemoryChip() {
+    if (!state.sessionId) {
+        hideMemoryChip();
+        return;
+    }
+    try {
+        const resp = await api("GET", `/api/memory/adopt/${state.sessionId}`);
+        if (resp && resp.pending && resp.memory_block) {
+            renderMemoryChip(resp.memory_block);
+        } else {
+            hideMemoryChip();
+        }
+    } catch (err) {
+        hideMemoryChip();
+    }
+}
+
+async function clearMemoryChip() {
+    if (!state.sessionId) {
+        hideMemoryChip();
+        return;
+    }
+    try {
+        await api("DELETE", `/api/memory/adopt/${state.sessionId}`);
+    } catch (err) {
+        // Even if the server disagrees, hide the chip locally.
+    }
+    hideMemoryChip();
+    flash("Memory chip cleared");
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
@@ -1182,6 +1472,41 @@ function boot() {
     document
         .getElementById("button-dag-refresh")
         .addEventListener("click", refreshForkGraph);
+    const mentionBtn = document.getElementById("button-mention");
+    if (mentionBtn) {
+        mentionBtn.addEventListener("click", () => {
+            openMentionPanel().catch(() => {});
+        });
+    }
+    document
+        .getElementById("mention-tab-distill")
+        ?.addEventListener("click", () => setMentionTab("distill"));
+    document
+        .getElementById("mention-tab-raw")
+        ?.addEventListener("click", () => setMentionTab("raw"));
+    document
+        .getElementById("mention-distill-run")
+        ?.addEventListener("click", () => {
+            runDistillSearch().catch(() => {});
+        });
+    document
+        .getElementById("mention-raw-run")
+        ?.addEventListener("click", () => {
+            runRawSearch().catch(() => {});
+        });
+    document
+        .getElementById("mention-adopt")
+        ?.addEventListener("click", () => {
+            adoptMentionPreview().catch(() => {});
+        });
+    document
+        .getElementById("mention-cancel")
+        ?.addEventListener("click", closeMentionPanel);
+    document
+        .getElementById("memory-chip-clear")
+        ?.addEventListener("click", () => {
+            clearMemoryChip().catch(() => {});
+        });
     const fitBtn = document.getElementById("button-dag-fit");
     if (fitBtn) {
         fitBtn.addEventListener("click", () => {
@@ -1235,5 +1560,16 @@ if (typeof window !== "undefined") {
         loadEdgeMemos,
         hydrateSessionTurns,
         attachEventStream,
+        openMentionPanel,
+        closeMentionPanel,
+        setMentionTab,
+        runDistillSearch,
+        runRawSearch,
+        adoptMentionPreview,
+        renderMemoryChip,
+        hideMemoryChip,
+        refreshMemoryChip,
+        clearMemoryChip,
+        populateMentionSessionSelectors,
     };
 }

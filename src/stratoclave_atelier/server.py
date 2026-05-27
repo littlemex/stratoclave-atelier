@@ -33,6 +33,7 @@ from stratoclave_atelier.api import (
     groups_router,
     health_router,
     ingest_router,
+    memory_router,
     sessions_router,
     snapshot_queries_router,
 )
@@ -133,6 +134,7 @@ def create_app(
     app.include_router(snapshot_queries_router)
     app.include_router(agent_runs_router)
     app.include_router(agent_router)
+    app.include_router(memory_router)
     _mount_frontend(app)
     return app
 

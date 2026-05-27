@@ -42,6 +42,15 @@
             >
                 Fork now
             </button>
+            <button
+                type="button"
+                id="button-mention"
+                data-testid="chat-mention"
+                title="Ask another session"
+                disabled
+            >
+                @ session
+            </button>
             <a href="/panels" data-testid="chat-open-panels">Open panels</a>
         </nav>
     </header>
@@ -116,6 +125,22 @@
         </aside>
     </div>
     <form id="chat-form" class="chat-form" data-testid="chat-form">
+        <div
+            id="memory-chip"
+            class="memory-chip"
+            data-testid="memory-chip"
+            hidden
+        >
+            <span class="memory-chip-label" data-testid="memory-chip-label"></span>
+            <button
+                type="button"
+                id="memory-chip-clear"
+                data-testid="memory-chip-clear"
+                title="Drop the queued memory block"
+            >
+                ×
+            </button>
+        </div>
         <textarea
             id="chat-input"
             name="prompt"
@@ -168,6 +193,136 @@
                     data-testid="branch-confirm-ok"
                 >
                     Branch
+                </button>
+            </menu>
+        </form>
+    </dialog>
+
+    <dialog id="mention-panel" class="mention-panel" data-testid="mention-panel">
+        <form method="dialog" class="mention-form">
+            <h2>Ask another session</h2>
+            <div class="mention-tabs" role="tablist">
+                <button
+                    type="button"
+                    id="mention-tab-distill"
+                    data-testid="mention-tab-distill"
+                    class="mention-tab is-active"
+                    role="tab"
+                    aria-selected="true"
+                >
+                    Distilled (B)
+                </button>
+                <button
+                    type="button"
+                    id="mention-tab-raw"
+                    data-testid="mention-tab-raw"
+                    class="mention-tab"
+                    role="tab"
+                    aria-selected="false"
+                >
+                    Raw events (A)
+                </button>
+            </div>
+
+            <div
+                id="mention-pane-distill"
+                class="mention-pane"
+                role="tabpanel"
+                data-testid="mention-pane-distill"
+            >
+                <p
+                    id="mention-distill-disabled"
+                    class="mention-disabled"
+                    data-testid="mention-distill-disabled"
+                    hidden
+                >
+                    Distilled memory is not enabled on this server. Switch
+                    to <em>Raw events</em> to fall back to per-session search.
+                </p>
+                <label>
+                    <span>Sessions to scope (multi-select; leave empty for "all")</span>
+                    <select
+                        id="mention-distill-sessions"
+                        data-testid="mention-distill-sessions"
+                        multiple
+                        size="6"
+                    ></select>
+                </label>
+                <label>
+                    <span>Query</span>
+                    <input
+                        type="text"
+                        id="mention-distill-query"
+                        data-testid="mention-distill-query"
+                        maxlength="4000"
+                        placeholder="e.g. how did we tune Postgres?"
+                    />
+                </label>
+                <button
+                    type="button"
+                    id="mention-distill-run"
+                    data-testid="mention-distill-run"
+                >
+                    Search
+                </button>
+            </div>
+
+            <div
+                id="mention-pane-raw"
+                class="mention-pane"
+                role="tabpanel"
+                data-testid="mention-pane-raw"
+                hidden
+            >
+                <label>
+                    <span>Target session</span>
+                    <select
+                        id="mention-raw-session"
+                        data-testid="mention-raw-session"
+                    ></select>
+                </label>
+                <label>
+                    <span>Query (substring, case-insensitive)</span>
+                    <input
+                        type="text"
+                        id="mention-raw-query"
+                        data-testid="mention-raw-query"
+                        maxlength="4000"
+                        placeholder="e.g. work_mem"
+                    />
+                </label>
+                <button
+                    type="button"
+                    id="mention-raw-run"
+                    data-testid="mention-raw-run"
+                >
+                    Search
+                </button>
+            </div>
+
+            <pre
+                id="mention-results"
+                class="mention-results"
+                data-testid="mention-results"
+            ></pre>
+
+            <menu>
+                <button
+                    type="button"
+                    value="cancel"
+                    id="mention-cancel"
+                    data-testid="mention-cancel"
+                >
+                    Close
+                </button>
+                <button
+                    type="button"
+                    value="adopt"
+                    id="mention-adopt"
+                    data-testid="mention-adopt"
+                    disabled
+                >
+                    Adopt for next turn
                 </button>
             </menu>
         </form>

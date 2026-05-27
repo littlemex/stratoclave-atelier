@@ -55,6 +55,118 @@ def _parse_sse(text: str) -> list[dict[str, str]]:
 
 
 @pytest.mark.asyncio
+async def test_search_events_returns_matching_payloads(
+    client: TestClient, store: InMemoryStore
+) -> None:
+    """Substring match (case-insensitive) over ``payload.content``."""
+
+    session = await store.create_session(title="s")
+    await store.append_event(
+        session_id=session.session_id,
+        kind="turn",
+        payload={"role": "user", "content": "How do I tune Postgres?"},
+    )
+    await store.append_event(
+        session_id=session.session_id,
+        kind="turn",
+        payload={"role": "assistant", "content": "Try work_mem first."},
+    )
+    await store.append_event(
+        session_id=session.session_id,
+        kind="turn",
+        payload={"role": "user", "content": "What about Redis?"},
+    )
+
+    resp = client.get(
+        f"/api/sessions/{session.session_id}/events/search",
+        params={"q": "postgres"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["query"] == "postgres"
+    assert len(body["matches"]) == 1
+    assert body["matches"][0]["payload"]["content"] == "How do I tune Postgres?"
+    # ``total_scanned`` walks every turn (kind defaults to None -> match all).
+    assert body["total_scanned"] == 3
+
+
+@pytest.mark.asyncio
+async def test_search_events_respects_kind_filter(client: TestClient, store: InMemoryStore) -> None:
+    """``kind=turn`` filters out non-turn events before substring matching."""
+
+    session = await store.create_session(title="s")
+    await store.append_event(
+        session_id=session.session_id,
+        kind="turn",
+        payload={"role": "user", "content": "deploy to prod"},
+    )
+    await store.append_event(
+        session_id=session.session_id,
+        kind="snapshot_query",
+        payload={"content": "deploy"},
+    )
+
+    resp = client.get(
+        f"/api/sessions/{session.session_id}/events/search",
+        params={"q": "deploy", "kind": "turn"},
+    )
+    body = resp.json()
+    assert len(body["matches"]) == 1
+    assert body["matches"][0]["kind"] == "turn"
+
+
+@pytest.mark.asyncio
+async def test_search_events_caps_at_limit(client: TestClient, store: InMemoryStore) -> None:
+    """``limit`` short-circuits scanning once the cap is reached."""
+
+    session = await store.create_session(title="s")
+    for i in range(5):
+        await store.append_event(
+            session_id=session.session_id,
+            kind="turn",
+            payload={"role": "user", "content": f"hit {i}"},
+        )
+
+    resp = client.get(
+        f"/api/sessions/{session.session_id}/events/search",
+        params={"q": "hit", "limit": 2},
+    )
+    body = resp.json()
+    assert len(body["matches"]) == 2
+    # Stops scanning at the second match.
+    assert body["total_scanned"] == 2
+
+
+@pytest.mark.asyncio
+async def test_search_events_unknown_session_returns_404(
+    client: TestClient,
+) -> None:
+    resp = client.get(f"/api/sessions/{uuid4()}/events/search", params={"q": "anything"})
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_search_events_falls_back_to_json_dump(
+    client: TestClient, store: InMemoryStore
+) -> None:
+    """Payloads without a ``content`` field still match via JSON dump."""
+
+    session = await store.create_session(title="s")
+    await store.append_event(
+        session_id=session.session_id,
+        kind="turn",
+        payload={"role": "tool", "tool_name": "rg", "args": ["needle"]},
+    )
+
+    resp = client.get(
+        f"/api/sessions/{session.session_id}/events/search",
+        params={"q": "needle"},
+    )
+    body = resp.json()
+    assert len(body["matches"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_replay_streams_all_events(client: TestClient, store: InMemoryStore) -> None:
     session = await store.create_session(title="s")
     for i in range(3):

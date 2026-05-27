@@ -60,12 +60,24 @@ class MemoryService(Protocol):
         unfiltered slice and let the implementation filter.
         """
 
-    async def retrieve(self, *, query: str, top_k: int = 5) -> str | None:
+    async def retrieve(
+        self,
+        *,
+        query: str,
+        top_k: int = 5,
+        scope_session_ids: Sequence[UUID] | None = None,
+    ) -> str | None:
         """Return a ``<memory>``-ready string for ``query`` or ``None``.
 
         ``None`` means "no useful context" (either disabled, no
         learnings yet, or the retriever returned nothing); the caller is
         expected to skip the ``<memory>`` block in that case.
+
+        ``scope_session_ids`` (when set) restricts the retrieval to
+        learnings whose ``source_session`` is one of the provided
+        atelier session ids. ``None`` (the default) keeps the existing
+        behaviour of searching every active learning. An empty sequence
+        is honored as "no allowed sessions" and yields ``None``.
         """
 
     async def aclose(self) -> None:
@@ -91,7 +103,14 @@ class NoopMemoryService(MemoryService):
     ) -> None:
         return None
 
-    async def retrieve(self, *, query: str, top_k: int = 5) -> str | None:
+    async def retrieve(
+        self,
+        *,
+        query: str,
+        top_k: int = 5,
+        scope_session_ids: Sequence[UUID] | None = None,
+    ) -> str | None:
+        del query, top_k, scope_session_ids
         return None
 
     async def aclose(self) -> None:
