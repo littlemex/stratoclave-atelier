@@ -36,6 +36,7 @@ from stratoclave_atelier.api import (
     sessions_router,
     snapshot_queries_router,
 )
+from stratoclave_atelier.auto_namer import AutoNamer, build_auto_namer
 from stratoclave_atelier.blobs import BlobStore, FileBlobStore
 from stratoclave_atelier.config import AtelierConfig
 from stratoclave_atelier.db import AsyncpgStore, Store, create_engine
@@ -55,6 +56,7 @@ def create_app(
     blob_store: BlobStore | None = None,
     snapshot_resolver: SnapshotResolver | None = None,
     memory_service: MemoryService | None = None,
+    auto_namer: AutoNamer | None = None,
 ) -> FastAPI:
     """Build a FastAPI application bound to the given config and store.
 
@@ -88,6 +90,7 @@ def create_app(
         app.state.event_bus = bus
         memory = memory_service if memory_service is not None else await build_memory_service(cfg)
         app.state.memory_service = memory
+        app.state.auto_namer = auto_namer if auto_namer is not None else build_auto_namer(cfg)
         if store is not None:
             app.state.store = store
             app.state.agent_runner = AgentRunner(config=cfg, store=store, bus=bus, memory=memory)

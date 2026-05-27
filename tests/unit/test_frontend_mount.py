@@ -60,3 +60,30 @@ def test_static_panels_assets_are_served(client: TestClient) -> None:
     css = client.get("/static/panels/css/app.css")
     assert css.status_code == 200
     assert "graph-node" in css.text
+
+
+def test_stage_j_shell_elements_are_present(client: TestClient) -> None:
+    """Stage J: header has Fork now button, sidebar DAG, breadcrumb, dialogs."""
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    body = resp.text
+    assert 'id="button-branch"' in body
+    assert "Fork now" in body
+    assert 'id="chat-breadcrumb"' in body
+    assert 'id="chat-fork-dag"' in body
+    assert 'id="dag-svg"' in body
+    assert 'id="branch-confirm"' in body
+    assert 'id="edge-memo"' in body
+
+
+def test_stage_j_chat_js_carries_branch_logic(client: TestClient) -> None:
+    """The chat module ships the orchestrator + DAG renderer."""
+
+    resp = client.get("/static/js/chat.js")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "/branch" in body
+    assert "fork-graph" in body
+    assert "EDGE_MEMO_KEY" in body
+    assert "layoutDag" in body

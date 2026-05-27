@@ -13,6 +13,7 @@ from typing import Annotated, cast
 
 from fastapi import Depends, HTTPException, Request, status
 
+from stratoclave_atelier.auto_namer import AutoNamer
 from stratoclave_atelier.blobs import BlobStore
 from stratoclave_atelier.config import AtelierConfig
 from stratoclave_atelier.core import ConflictError, NotFoundError
@@ -102,6 +103,24 @@ def get_memory_service(request: Request) -> MemoryService:
     return cast(MemoryService, memory)
 
 
+def get_auto_namer(request: Request) -> AutoNamer:
+    """Return the :class:`AutoNamer` attached to the FastAPI app.
+
+    Stage J wires this in :func:`stratoclave_atelier.server.create_app`
+    via the lifespan callback. The default :class:`NoopAutoNamer` is
+    selected when no agent backend is configured, so handlers can
+    always depend on a non-None object.
+    """
+
+    namer = getattr(request.app.state, "auto_namer", None)
+    if namer is None:  # pragma: no cover -- developer error if hit
+        raise RuntimeError(
+            "AutoNamer is not configured on app.state.auto_namer; "
+            "build the app via create_app() so the lifespan can attach one"
+        )
+    return cast(AutoNamer, namer)
+
+
 def get_config(request: Request) -> AtelierConfig:
     """Return the :class:`AtelierConfig` attached to the FastAPI app."""
 
@@ -119,6 +138,7 @@ BlobStoreDep = Annotated[BlobStore, Depends(get_blob_store)]
 SnapshotResolverDep = Annotated[SnapshotResolver, Depends(get_snapshot_resolver)]
 EventBusDep = Annotated[EventBus, Depends(get_event_bus)]
 MemoryServiceDep = Annotated[MemoryService, Depends(get_memory_service)]
+AutoNamerDep = Annotated[AutoNamer, Depends(get_auto_namer)]
 ConfigDep = Annotated[AtelierConfig, Depends(get_config)]
 
 

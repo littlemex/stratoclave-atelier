@@ -33,21 +33,69 @@
             >
                 Freeze
             </button>
+            <button
+                type="button"
+                id="button-branch"
+                data-testid="chat-branch"
+                title="Freeze + auto-name + fork from the current session"
+                disabled
+            >
+                Fork now
+            </button>
             <a href="/panels" data-testid="chat-open-panels">Open panels</a>
         </nav>
     </header>
-    <main class="chat-main">
-        <ol id="chat-log" class="chat-log" data-testid="chat-log"></ol>
-        <div
-            id="chat-empty"
-            class="chat-empty"
-            data-testid="chat-empty"
+    <nav
+        id="chat-breadcrumb"
+        class="chat-breadcrumb"
+        data-testid="chat-breadcrumb"
+        aria-label="Branch path"
+    ></nav>
+    <div class="chat-layout">
+        <main class="chat-main">
+            <ol id="chat-log" class="chat-log" data-testid="chat-log"></ol>
+            <div
+                id="chat-empty"
+                class="chat-empty"
+                data-testid="chat-empty"
+            >
+                Start by sending a prompt below. Each session keeps its own
+                memory and can be frozen / forked from
+                <a href="/panels">panels</a>.
+            </div>
+        </main>
+        <aside
+            id="chat-fork-dag"
+            class="chat-fork-dag"
+            data-testid="chat-fork-dag"
+            aria-label="Fork DAG"
         >
-            Start by sending a prompt below. Each session keeps its own
-            memory and can be frozen / forked from
-            <a href="/panels">panels</a>.
-        </div>
-    </main>
+            <header class="dag-header">
+                <h2>Fork DAG</h2>
+                <button
+                    type="button"
+                    id="button-dag-refresh"
+                    data-testid="dag-refresh"
+                    title="Reload the fork graph"
+                >
+                    Refresh
+                </button>
+            </header>
+            <div
+                id="dag-empty"
+                class="dag-empty"
+                data-testid="dag-empty"
+            >
+                Branches you create from this session appear here.
+            </div>
+            <svg
+                id="dag-svg"
+                data-testid="dag-svg"
+                xmlns="http://www.w3.org/2000/svg"
+                aria-hidden="true"
+            ></svg>
+        </aside>
+    </div>
     <form id="chat-form" class="chat-form" data-testid="chat-form">
         <textarea
             id="chat-input"
@@ -66,6 +114,80 @@
         </div>
     </form>
     <div id="status-bar" class="status" data-testid="status-bar" aria-live="polite"></div>
+
+    <dialog id="branch-confirm" class="branch-confirm" data-testid="branch-confirm">
+        <form method="dialog" class="branch-confirm-form">
+            <h2>Branch from this turn?</h2>
+            <p>
+                Freeze the parent session up to seq
+                <strong id="branch-confirm-seq"></strong> and start a new
+                branch from there. The new branch is auto-named.
+            </p>
+            <label>
+                <span>Optional title override</span>
+                <input
+                    type="text"
+                    id="branch-confirm-title"
+                    data-testid="branch-confirm-title"
+                    maxlength="200"
+                    placeholder="(leave blank for auto-name)"
+                />
+            </label>
+            <menu>
+                <button
+                    type="button"
+                    value="cancel"
+                    id="branch-confirm-cancel"
+                    data-testid="branch-confirm-cancel"
+                >
+                    Cancel
+                </button>
+                <button
+                    type="button"
+                    value="ok"
+                    id="branch-confirm-ok"
+                    data-testid="branch-confirm-ok"
+                >
+                    Branch
+                </button>
+            </menu>
+        </form>
+    </dialog>
+
+    <dialog id="edge-memo" class="edge-memo" data-testid="edge-memo">
+        <form method="dialog" class="edge-memo-form">
+            <h2>Edge memo</h2>
+            <p>
+                Local-only note for this fork edge. Saved in your browser
+                (localStorage), not on the server.
+            </p>
+            <textarea
+                id="edge-memo-text"
+                data-testid="edge-memo-text"
+                maxlength="500"
+                rows="4"
+                placeholder="e.g. slide-gen branch"
+            ></textarea>
+            <menu>
+                <button
+                    type="button"
+                    value="cancel"
+                    id="edge-memo-cancel"
+                    data-testid="edge-memo-cancel"
+                >
+                    Cancel
+                </button>
+                <button
+                    type="button"
+                    value="ok"
+                    id="edge-memo-save"
+                    data-testid="edge-memo-save"
+                >
+                    Save
+                </button>
+            </menu>
+        </form>
+    </dialog>
 
     <script type="module" src="/static/js/chat.js"></script>
 </body>

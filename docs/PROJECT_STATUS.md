@@ -1,6 +1,6 @@
 # stratoclave-atelier: Implementation Status
 
-**Last updated**: 2026-05-27 (Stage I)
+**Last updated**: 2026-05-27 (Stage J)
 **Project started**: 2026-05-25
 
 ## Overall progress
@@ -18,6 +18,20 @@
 | G     | Real agent loop via stratoclave-loom + cross-session memory via stratoclave-distill + claude-capture-style chat at `/` + legacy panels moved to `/panels` | Done |
 | H     | Per-session backend selection (claude_code / kiro_code / mock) via UI picker, persisted in `sessions.agent_backend`, validated against operator-allowed list | Done |
 | I     | `DistillSnapshotResolver` (distill-backed snapshot answers) + CLI `session tail` (SSE -> JSON Lines) + `ATELIER_SNAPSHOT_RESOLVER` knob | Done |
+| J     | Branch from chat: `POST /api/sessions/{id}/branch` orchestrator + `AutoNamer` (Loom / Noop) + chat header "Fork now" + per-turn hover + breadcrumb + right-side SVG fork DAG + edge memos in localStorage | Done |
+
+### What ships in Stage J (this delta)
+
+| Component | File(s) | State |
+|-----------|---------|-------|
+| `AutoNamer` Protocol + `LoomAutoNamer` (one-shot loom prompt over recent N turns, 12s timeout) + `NoopAutoNamer` (`<parent>-<4 hex>`) + `build_auto_namer(cfg)` factory | `src/stratoclave_atelier/auto_namer.py` | Done |
+| `AutoNamerDep` + `get_auto_namer` reading `app.state.auto_namer` | `src/stratoclave_atelier/api/deps.py` | Done |
+| Lifespan picks `build_auto_namer(cfg)` unless caller injects `auto_namer=` | `src/stratoclave_atelier/server.py` | Done |
+| `SessionBranch` request + `SessionBranchResponse` (`child` / `parent_version` / `auto_named`) | `src/stratoclave_atelier/api/schemas.py` | Done |
+| `POST /api/sessions/{id}/branch` orchestrator: freeze + auto-name + fork in one call; namer failure rotates to NoopAutoNamer | `src/stratoclave_atelier/api/sessions.py::branch_session` | Done |
+| Chat shell: header `Fork now` button, per-turn hover `Branch from here`, breadcrumb (ancestry chain), right-side SVG fork DAG with clickable nodes, edge-memo dialog backed by `localStorage` (key `atelier:fork-edge-memos`), URL `?session=<id>` deep-link + popstate hydrate via SSE replay | `frontend/static/index.html`, `frontend/static/css/chat.css`, `frontend/static/js/chat.js` | Done |
+| Unit tests (AutoNamer: 14 tests / branch endpoint: 8 tests / Stage J shell + chat.js markers: 2 tests) | `tests/unit/test_auto_namer.py`, `tests/unit/test_api_branch.py`, `tests/unit/test_frontend_mount.py` | Done |
+| Walkthrough doc | `docs/STAGE_J_WALKTHROUGH.md` | Done |
 
 ### What ships in Stage I (this delta)
 
@@ -217,18 +231,21 @@ These were excluded by explicit project decision (see `HANDOVER.md`):
 
 | Role    | Owner    | Status   | Current task                   |
 |---------|----------|----------|--------------------------------|
-| Backend | (lead)   | Active   | Stage G shipped: AgentRunner + SSE live broadcast + MemoryService; push pending |
-| UI      | (lead)   | Active   | Stage G shipped: chat at `/`, panels at `/panels`; auth still pending |
+| Backend | (lead)   | Active   | Stage J shipped: `POST /branch` + `AutoNamer` (Loom/Noop) + memory ingest on freeze; push pending |
+| UI      | (lead)   | Active   | Stage J shipped: header `Fork now`, per-turn `Branch from here`, breadcrumb, fork DAG sidebar, edge-memo dialog; auth still pending |
 
 ## Next steps (priority order)
 
-1. **Loom "spawn on version"**: add a button on each frozen Version row
-   to start a new chat seeded with that JSONL.
-2. **Auth wiring**: bearer token / Cognito mode end-to-end through the
+1. **Auth wiring**: bearer token / Cognito mode end-to-end through the
    SPA (currently relies on `ATELIER_AUTH_MODE=none`).
-3. **Memory ingestion observability**: surface failed
+2. **Memory ingestion observability**: surface failed
    `memory.ingest_session` attempts in the panels UI (currently
    logged-only).
-4. **LLM-backed snapshot resolver**: extend `DistillSnapshotResolver`
+3. **LLM-backed snapshot resolver**: extend `DistillSnapshotResolver`
    with an optional one-shot LLM call against the loaded JSONL so
    answers go beyond retrieval hits.
+4. **Server-side edge memos**: lift the localStorage-backed
+   `atelier:fork-edge-memos` (Stage J) into a `fork_edge_memos` table
+   so memos travel with the workspace, not the browser.
+5. **Loom "spawn on version"**: add a button on each frozen Version row
+   to start a new chat seeded with that JSONL.

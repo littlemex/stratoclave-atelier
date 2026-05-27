@@ -23,6 +23,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, status
 
 from stratoclave_atelier.api.deps import (
+    AutoNamerDep,
     BlobStoreDep,
     ConfigDep,
     EventBusDep,
@@ -33,6 +34,8 @@ from stratoclave_atelier.api.deps import (
 )
 from stratoclave_atelier.api.schemas import (
     EventRead,
+    SessionBranch,
+    SessionBranchResponse,
     SessionCreate,
     SessionFork,
     SessionFreeze,
@@ -40,6 +43,7 @@ from stratoclave_atelier.api.schemas import (
     TurnAppend,
     VersionRead,
 )
+from stratoclave_atelier.auto_namer import NoopAutoNamer
 from stratoclave_atelier.core import ConflictError, NotFoundError
 from stratoclave_atelier.freeze import freeze_session
 
@@ -188,6 +192,100 @@ async def append_turn(
     )
     await bus.publish(event)
     return EventRead.from_domain(event)
+
+
+@router.post(
+    "/{session_id}/branch",
+    response_model=SessionBranchResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def branch_session(
+    session_id: UUID,
+    payload: SessionBranch,
+    store: StoreDep,
+    blob_store: BlobStoreDep,
+    memory: MemoryServiceDep,
+    auto_namer: AutoNamerDep,
+    config: ConfigDep,
+) -> SessionBranchResponse:
+    """Branch the live session: freeze + auto-name + fork in one call.
+
+    Stage J entrypoint for the chat shell's "Fork now" button. The
+    handler resolves the parent session, freezes the requested turn
+    range (defaults to the whole session), generates a title via the
+    configured :class:`AutoNamer`, then creates a child session whose
+    ``parent_version_id`` / ``fork_seq`` point at the freshly frozen
+    Version.
+
+    The auto-name call is wrapped in ``try/except`` so a misbehaving
+    LLM never blocks the branch flow: any failure (timeout / empty /
+    error chunk / runaway output) rotates to :class:`NoopAutoNamer`
+    semantics (``parent.title-<4 hex>``), and the response signals this
+    via ``auto_named=False``.
+    """
+
+    try:
+        parent = await store.get_session(session_id)
+    except NotFoundError as exc:
+        raise http_not_found(exc) from exc
+
+    try:
+        backend = _resolve_backend(config, payload.agent_backend)
+    except ConflictError as exc:
+        raise http_conflict(exc) from exc
+
+    try:
+        version = await freeze_session(
+            store=store,
+            blob_store=blob_store,
+            session_id=session_id,
+            start_seq=payload.start_seq,
+            end_seq=payload.end_seq,
+            label=payload.label,
+            memory=memory,
+        )
+    except NotFoundError as exc:
+        raise http_not_found(exc) from exc
+    except ConflictError as exc:
+        raise http_conflict(exc) from exc
+
+    auto_named = False
+    if payload.title is not None:
+        title = payload.title
+    else:
+        recent_events = await store.list_events(session_id)
+        try:
+            title = await auto_namer.name_branch(
+                parent=parent,
+                recent_events=recent_events,
+            )
+            auto_named = auto_namer.enabled
+        except Exception:
+            title = await NoopAutoNamer().name_branch(parent=parent, recent_events=recent_events)
+            auto_named = False
+
+    fork_seq = payload.end_seq if payload.end_seq is not None else version.end_seq
+    inherited_backend = backend if backend is not None else parent.agent_backend
+
+    try:
+        child = await store.create_session(
+            title=title,
+            group_id=payload.group_id if payload.group_id is not None else parent.group_id,
+            parent_session_id=session_id,
+            parent_version_id=version.version_id,
+            fork_seq=fork_seq,
+            agent_backend=inherited_backend,
+        )
+    except NotFoundError as exc:
+        raise http_not_found(exc) from exc
+    except ConflictError as exc:
+        raise http_conflict(exc) from exc
+
+    return SessionBranchResponse(
+        child=SessionRead.from_domain(child),
+        parent_version=VersionRead.from_domain(version),
+        auto_named=auto_named,
+    )
 
 
 @router.post(
