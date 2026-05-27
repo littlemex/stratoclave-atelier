@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any, ClassVar
 
@@ -280,6 +281,116 @@ def test_session_request_error_exits_nonzero(
     assert excinfo.value.code == 2
     err = capsys.readouterr().err
     assert "409" in err
+
+
+class _StubStreamResponse:
+    """Mimic the subset of ``httpx.Response`` we use in streaming mode."""
+
+    def __init__(self, *, status_code: int = 200, lines: list[str] | None = None) -> None:
+        self.status_code = status_code
+        self._lines = lines or []
+        self._read_payload = b""
+
+    def __enter__(self) -> _StubStreamResponse:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def iter_lines(self) -> list[str]:
+        return list(self._lines)
+
+    def read(self) -> bytes:
+        return self._read_payload
+
+
+class _StubStreamClient:
+    """Records the streaming GET call and returns a canned response."""
+
+    last_call: ClassVar[dict[str, Any]] = {}
+    next_response: ClassVar[_StubStreamResponse | None] = None
+
+    def __init__(self, *, timeout: Any) -> None:
+        _StubStreamClient.last_call["timeout"] = timeout
+
+    def __enter__(self) -> _StubStreamClient:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Any = None,
+    ) -> _StubStreamResponse:
+        _StubStreamClient.last_call.update(method=method, url=url, params=params)
+        assert _StubStreamClient.next_response is not None, "test must set next_response"
+        return _StubStreamClient.next_response
+
+
+@pytest.fixture
+def stub_httpx_stream(monkeypatch: pytest.MonkeyPatch) -> type[_StubStreamClient]:
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", _StubStreamClient)
+    _StubStreamClient.last_call = {}
+    _StubStreamClient.next_response = None
+    return _StubStreamClient
+
+
+def test_session_tail_emits_one_json_line_per_event(
+    stub_httpx_stream: type[_StubStreamClient],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stub_httpx_stream.next_response = _StubStreamResponse(
+        lines=[
+            "id: 0",
+            "event: turn",
+            'data: {"seq":0,"kind":"turn","payload":{"role":"user","content":"hi"}}',
+            "",
+            ": ping",
+            "",
+            "id: 1",
+            "event: agent_chunk",
+            'data: {"seq":1,"kind":"agent_chunk","payload":{"text":"hello"}}',
+            "",
+        ],
+    )
+    rc = cli.main(["session", "tail", "s-1"])
+    assert rc == 0
+    assert stub_httpx_stream.last_call["method"] == "GET"
+    assert stub_httpx_stream.last_call["url"].endswith("/api/sessions/s-1/events")
+    assert stub_httpx_stream.last_call["params"] == {"from_seq": 0, "follow": "true"}
+
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) == 2
+    assert json.loads(out[0])["seq"] == 0
+    assert json.loads(out[1])["seq"] == 1
+
+
+def test_session_tail_no_follow_flag(
+    stub_httpx_stream: type[_StubStreamClient],
+) -> None:
+    stub_httpx_stream.next_response = _StubStreamResponse(lines=[])
+    rc = cli.main(["session", "tail", "s-1", "--from-seq", "7", "--no-follow"])
+    assert rc == 0
+    assert stub_httpx_stream.last_call["params"] == {"from_seq": 7, "follow": "false"}
+
+
+def test_session_tail_error_status_exits_two(
+    stub_httpx_stream: type[_StubStreamClient],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    response = _StubStreamResponse(status_code=404)
+    response._read_payload = b'{"detail":"unknown session"}'
+    stub_httpx_stream.next_response = response
+    rc = cli.main(["session", "tail", "missing"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "404" in err
 
 
 def test_serve_in_memory_sets_placeholder_database_url(

@@ -1,6 +1,6 @@
 # stratoclave-atelier: Implementation Status
 
-**Last updated**: 2026-05-27 (Stage H)
+**Last updated**: 2026-05-27 (Stage I)
 **Project started**: 2026-05-25
 
 ## Overall progress
@@ -17,6 +17,18 @@
 | F     | Per-turn freeze UI + fork dialog + snapshot-query dialog + live-tail SSE + HTTP turn fallback + CLI session subcommands | Done |
 | G     | Real agent loop via stratoclave-loom + cross-session memory via stratoclave-distill + claude-capture-style chat at `/` + legacy panels moved to `/panels` | Done |
 | H     | Per-session backend selection (claude_code / kiro_code / mock) via UI picker, persisted in `sessions.agent_backend`, validated against operator-allowed list | Done |
+| I     | `DistillSnapshotResolver` (distill-backed snapshot answers) + CLI `session tail` (SSE -> JSON Lines) + `ATELIER_SNAPSHOT_RESOLVER` knob | Done |
+
+### What ships in Stage I (this delta)
+
+| Component | File(s) | State |
+|-----------|---------|-------|
+| `DistillSnapshotResolver` (reads version JSONL via `BlobStore`, queries distill `Retriever`, renders deterministic header + role histogram + memory hits) | `src/stratoclave_atelier/snapshot_resolver.py` | Done |
+| `ATELIER_SNAPSHOT_RESOLVER=echo|distill` config knob with cross-validation against `distill_enabled` | `src/stratoclave_atelier/config.py` | Done (Stage H delta, activated here) |
+| FastAPI lifespan picks `DistillSnapshotResolver` when `cfg.snapshot_resolver=='distill'`, owns its asyncpg pool, closes via `aclose()` on shutdown | `src/stratoclave_atelier/server.py` | Done |
+| `session tail` CLI subcommand (httpx streaming, SSE frame parser, JSON-line stdout, `--from-seq`, `--no-follow`) | `src/stratoclave_atelier/cli.py` | Done |
+| Unit tests (Distill resolver: header / fallback / retriever-failure / missing-blob / aclose-idempotency; CLI tail: happy path / no-follow / 4xx) | `tests/unit/test_snapshot_resolver.py`, `tests/unit/test_cli.py` | Done |
+| Walkthrough doc | `docs/STAGE_I_WALKTHROUGH.md` | Done |
 
 ### What ships in Stage H (this delta)
 
@@ -210,15 +222,13 @@ These were excluded by explicit project decision (see `HANDOVER.md`):
 
 ## Next steps (priority order)
 
-1. **`DistillSnapshotResolver`**: replace `EchoSnapshotResolver` with a
-   real distill-backed resolver so snapshot-query can answer semantic
-   questions (currently echoes the question back).
-2. **CLI `session tail`**: subscribe to the SSE stream and stream JSON
-   events to stdout, mirroring the SPA's live tail.
-3. **Loom "spawn on version"**: add a button on each frozen Version row
+1. **Loom "spawn on version"**: add a button on each frozen Version row
    to start a new chat seeded with that JSONL.
-4. **Auth wiring**: bearer token / Cognito mode end-to-end through the
+2. **Auth wiring**: bearer token / Cognito mode end-to-end through the
    SPA (currently relies on `ATELIER_AUTH_MODE=none`).
-5. **Memory ingestion observability**: surface failed
+3. **Memory ingestion observability**: surface failed
    `memory.ingest_session` attempts in the panels UI (currently
    logged-only).
+4. **LLM-backed snapshot resolver**: extend `DistillSnapshotResolver`
+   with an optional one-shot LLM call against the loaded JSONL so
+   answers go beyond retrieval hits.

@@ -41,7 +41,11 @@ from stratoclave_atelier.config import AtelierConfig
 from stratoclave_atelier.db import AsyncpgStore, Store, create_engine
 from stratoclave_atelier.events_bus import EventBus
 from stratoclave_atelier.memory import MemoryService, build_memory_service
-from stratoclave_atelier.snapshot_resolver import EchoSnapshotResolver, SnapshotResolver
+from stratoclave_atelier.snapshot_resolver import (
+    DistillSnapshotResolver,
+    EchoSnapshotResolver,
+    SnapshotResolver,
+)
 
 
 def create_app(
@@ -71,7 +75,15 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.blob_store = blob_store or FileBlobStore(cfg.blob_dir)
-        app.state.snapshot_resolver = snapshot_resolver or EchoSnapshotResolver()
+        if snapshot_resolver is not None:
+            app.state.snapshot_resolver = snapshot_resolver
+            owns_resolver = False
+        elif cfg.snapshot_resolver == "distill":
+            app.state.snapshot_resolver = await DistillSnapshotResolver.from_config(cfg)
+            owns_resolver = True
+        else:
+            app.state.snapshot_resolver = EchoSnapshotResolver()
+            owns_resolver = False
         bus = EventBus()
         app.state.event_bus = bus
         memory = memory_service if memory_service is not None else await build_memory_service(cfg)
@@ -84,6 +96,8 @@ def create_app(
             finally:
                 await app.state.agent_runner.close()
                 await memory.aclose()
+                if owns_resolver:
+                    await app.state.snapshot_resolver.aclose()
             return
         engine = create_engine(cfg.database_url)
         runtime_store = AsyncpgStore(engine)
@@ -96,6 +110,8 @@ def create_app(
         finally:
             await app.state.agent_runner.close()
             await memory.aclose()
+            if owns_resolver:
+                await app.state.snapshot_resolver.aclose()
             await runtime_store.dispose()
 
     app = FastAPI(
