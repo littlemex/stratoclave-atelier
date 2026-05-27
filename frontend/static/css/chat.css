@@ -293,3 +293,293 @@ a:hover {
 .status.show {
     opacity: 1;
 }
+
+/* ----- Stage J: breadcrumb + DAG sidebar + branch UI --------------------- */
+
+.chat-breadcrumb {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    min-height: 30px;
+}
+
+.chat-breadcrumb[hidden] {
+    display: none;
+}
+
+.chat-breadcrumb a,
+.chat-breadcrumb button.crumb {
+    background: transparent;
+    color: var(--accent);
+    border: none;
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+}
+
+.chat-breadcrumb a:hover,
+.chat-breadcrumb button.crumb:hover {
+    background: var(--surface-2);
+    text-decoration: none;
+}
+
+.chat-breadcrumb .crumb-current {
+    color: var(--text);
+    font-weight: 600;
+    padding: 2px 6px;
+}
+
+.chat-breadcrumb .crumb-sep {
+    color: var(--muted);
+    padding: 0 2px;
+}
+
+.chat-layout {
+    flex: 1 1 auto;
+    display: flex;
+    min-height: 0;
+}
+
+.chat-layout .chat-main {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.chat-fork-dag {
+    flex: 0 0 280px;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    overflow: hidden;
+}
+
+.chat-fork-dag .dag-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+}
+
+.chat-fork-dag h2 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+}
+
+.chat-fork-dag #button-dag-refresh {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 8px;
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.chat-fork-dag #button-dag-refresh:hover {
+    background: var(--border);
+}
+
+.chat-fork-dag .dag-empty {
+    padding: 14px;
+    color: var(--muted);
+    font-size: 12px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    margin: 12px;
+    text-align: center;
+}
+
+.chat-fork-dag .dag-empty[hidden] {
+    display: none;
+}
+
+.chat-fork-dag #dag-svg {
+    flex: 1 1 auto;
+    width: 100%;
+    overflow: auto;
+}
+
+.chat-fork-dag #dag-svg[hidden] {
+    display: none;
+}
+
+.dag-node rect {
+    fill: var(--surface-2);
+    stroke: var(--border);
+    stroke-width: 1;
+    cursor: pointer;
+}
+
+.dag-node.current rect {
+    stroke: var(--accent);
+    stroke-width: 2;
+    fill: rgba(47, 129, 247, 0.12);
+}
+
+.dag-node text {
+    fill: var(--text);
+    font-size: 11px;
+    pointer-events: none;
+    font-family: inherit;
+}
+
+.dag-edge {
+    stroke: var(--border);
+    stroke-width: 1.4;
+    fill: none;
+}
+
+.dag-edge-label {
+    fill: var(--muted);
+    font-size: 10px;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.dag-edge-label:hover {
+    fill: var(--accent);
+    text-decoration: underline;
+}
+
+/* per-turn hover branch button */
+
+.chat-message {
+    position: relative;
+}
+
+.chat-message .branch-here {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: var(--surface-2);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 120ms ease;
+    font-family: inherit;
+}
+
+.chat-message:hover .branch-here {
+    opacity: 1;
+}
+
+.chat-message .branch-here:hover {
+    background: var(--border);
+    color: var(--text);
+}
+
+/* dialog (branch confirm + edge memo) */
+
+dialog.branch-confirm,
+dialog.edge-memo {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0;
+    max-width: 420px;
+    width: 90%;
+}
+
+dialog.branch-confirm::backdrop,
+dialog.edge-memo::backdrop {
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.branch-confirm-form,
+.edge-memo-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 18px 20px;
+}
+
+.branch-confirm-form h2,
+.edge-memo-form h2 {
+    margin: 0;
+    font-size: 15px;
+}
+
+.branch-confirm-form p,
+.edge-memo-form p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.branch-confirm-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.branch-confirm-form input,
+.edge-memo-form textarea {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 13px;
+}
+
+.branch-confirm-form menu,
+.edge-memo-form menu {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.branch-confirm-form menu button,
+.edge-memo-form menu button {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+}
+
+.branch-confirm-form menu button:hover,
+.edge-memo-form menu button:hover {
+    background: var(--border);
+}
+
+#branch-confirm-ok,
+#edge-memo-save {
+    background: var(--user);
+    color: white;
+    border-color: transparent;
+    font-weight: 600;
+}
+
+#branch-confirm-ok:hover,
+#edge-memo-save:hover {
+    background: var(--accent);
+}

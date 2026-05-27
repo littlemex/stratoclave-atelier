@@ -150,6 +150,66 @@ class VersionRead(BaseModel):
         )
 
 
+# Branch (freeze + auto-name + fork in one round trip) ----------------------
+
+
+class SessionBranch(BaseModel):
+    """Branch off the parent session by freezing then auto-naming a fork.
+
+    Stage J wraps the existing freeze + fork pipeline in a single
+    endpoint so the chat shell can branch the live conversation with a
+    one-click affordance:
+
+    1. Freeze the parent's turn range (defaults to the whole session).
+    2. Ask :class:`AutoNamer` for a short title summarising the parent's
+       recent intent.
+    3. Create a child :class:`Session` whose ``parent_version_id`` /
+       ``fork_seq`` point at the freshly frozen Version.
+
+    All fields are optional: with an empty body the handler freezes the
+    whole parent session, names the fork via the configured AutoNamer,
+    and pins ``fork_seq = parent's last turn``. Callers that already know
+    the precise turn (per-turn "branch from here") supply both
+    ``start_seq`` and ``end_seq`` to override the freeze range.
+    """
+
+    title: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description=(
+            "Override the auto-named title. When omitted the configured "
+            "AutoNamer (Stage J) generates one from the parent's recent turns."
+        ),
+    )
+    start_seq: int | None = Field(default=None, ge=0)
+    end_seq: int | None = Field(default=None, ge=0)
+    label: str | None = Field(default=None, max_length=200)
+    group_id: UUID | None = None
+    agent_backend: str | None = Field(
+        default=None,
+        description=(
+            "Override the parent session's backend for the new branch. "
+            "Defaults to inheriting the parent's backend."
+        ),
+    )
+
+
+class SessionBranchResponse(BaseModel):
+    """The freshly forked child session along with the parent's new Version."""
+
+    child: SessionRead
+    parent_version: VersionRead
+    auto_named: bool = Field(
+        ...,
+        description=(
+            "True when the title came from the configured AutoNamer; "
+            "False when the caller supplied ``title`` or the AutoNamer "
+            "fell through to the deterministic Noop fallback."
+        ),
+    )
+
+
 # Turns (HTTP append, alternative to WS ingest) -------------------------------
 
 

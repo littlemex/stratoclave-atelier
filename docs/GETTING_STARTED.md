@@ -1,6 +1,6 @@
 # stratoclave-atelier: Getting Started
 
-**Last updated**: 2026-05-27 (Stage H)
+**Last updated**: 2026-05-27 (Stage J)
 **Audience**: New contributors and operators bringing up atelier for the first time.
 
 ## Introduction
@@ -12,18 +12,23 @@ freezes a fork as an immutable, content-addressed version that can be
 referenced from other sessions.
 
 This guide walks through what you need to get atelier running on your
-laptop. Stages A through H are merged: Postgres schema and CRUD
+laptop. Stages A through J are merged: Postgres schema and CRUD
 (A / B), WebSocket ingest plus content-addressed freeze (C), fork-graph
 JSON and cross-session snapshot RPC (D), a vanilla-JS SPA that drives
 the whole loop (E), per-turn freeze + fork dialog + snapshot-query
 dialog + live-tail SSE + HTTP turn fallback + a `session` family of
 CLI subcommands (F), a real agent loop via stratoclave-loom +
 cross-session memory via stratoclave-distill + claude-capture-style
-chat at `/` with the legacy 4-panel SPA preserved at `/panels` (G), and
+chat at `/` with the legacy 4-panel SPA preserved at `/panels` (G),
 per-session backend selection in the chat header so operators can pick
-claude_code / kiro_code / mock per session (H). See
-`PROJECT_STATUS.md` for the up-to-date component matrix and
-`STAGE_H_WALKTHROUGH.md` for the latest walkthrough.
+claude_code / kiro_code / mock per session (H), a real
+`DistillSnapshotResolver` plus a `session tail` CLI (I), and one-click
+chat-side branching: `POST /api/sessions/{id}/branch` orchestrator,
+`AutoNamer` (Loom / Noop), header `Fork now` button, per-turn hover
+`Branch from here`, breadcrumb, right-side SVG fork DAG, and
+localStorage edge memos (J). See `PROJECT_STATUS.md` for the
+up-to-date component matrix and `STAGE_J_WALKTHROUGH.md` for the
+latest walkthrough.
 
 ## Where atelier sits in the 4-OSS series
 
@@ -321,6 +326,53 @@ parent session's backend by default.
 When `ATELIER_AGENT_BACKENDS_ALLOWED` is empty the Stage G singular
 behaviour applies: `ATELIER_AGENT_BACKEND` is the only allowed entry.
 
+## Stage J: branch from chat (freeze + auto-name + fork)
+
+Stage J ships a one-click branching surface in the chat shell. The
+chat header gains a `Fork now` button, every assistant / user turn
+gains a `Branch from here` hover affordance, the right pane renders a
+live SVG fork DAG of the current session's ancestry / descendants,
+and the title bar shows a clickable breadcrumb so deep forks remain
+navigable.
+
+Under the hood, the new endpoint orchestrates the existing primitives
+in a single call:
+
+```bash
+curl -s -X POST localhost:8000/api/sessions/<parent_id>/branch \
+  -H 'content-type: application/json' \
+  -d '{}'
+```
+
+With an empty body the handler freezes the whole parent session,
+asks the configured `AutoNamer` for a short title, and creates a child
+session whose `parent_version_id` / `fork_seq` point at the freshly
+frozen Version. The response carries `child` (the new session),
+`parent_version` (the just-created Version), and `auto_named` (`true`
+when the title came from the LLM, `false` when the deterministic
+`<parent.title>-<4 hex>` fallback was used).
+
+Pin a specific turn with `start_seq` / `end_seq` for the per-turn
+"Branch from here" semantics:
+
+```bash
+curl -s -X POST localhost:8000/api/sessions/<parent_id>/branch \
+  -H 'content-type: application/json' \
+  -d '{"start_seq": 0, "end_seq": 5, "label": "after refactor"}'
+```
+
+`AutoNamer` picks a backend automatically: when `ATELIER_AGENT_BACKEND`
+is set to a real loom backend (`claude_code` / `kiro_code`) atelier
+wires `LoomAutoNamer`, otherwise it falls through to `NoopAutoNamer`
+(`<parent.title>-<4 hex>`). The Loom call is wrapped in a 12 s
+timeout and a `try / except` so a misbehaving LLM never blocks the
+branch flow.
+
+Edge memos (the small notes you attach to a fork edge in the DAG
+sidebar) are stored client-side in `localStorage` under the key
+`atelier:fork-edge-memos`. They travel with the browser, not the
+workspace; promoting them to a server-side table is on the roadmap.
+
 ## Configuration
 
 All knobs are environment variables. Nothing is hard-coded in `src/`.
@@ -409,7 +461,13 @@ mypy src/stratoclave_atelier
   `DistillSnapshotResolver` (real distill-backed snapshot answers,
   swappable via `ATELIER_SNAPSHOT_RESOLVER=distill`) and the new
   `session tail` CLI.
-- Remaining work is "spawn an agent on this version" buttons in the
-  panels, end-to-end auth wiring, panels-side memory ingestion
-  observability, and an optional LLM-backed snapshot resolver. See
-  "Next steps" in `PROJECT_STATUS.md`.
+- Read `STAGE_J_WALKTHROUGH.md` for the deep dive on chat-side
+  branching: `POST /api/sessions/{id}/branch`, the `AutoNamer`
+  (Loom / Noop), the chat header `Fork now`, the per-turn hover
+  affordance, the breadcrumb, the right-side SVG fork DAG, and the
+  localStorage edge memos.
+- Remaining work is end-to-end auth wiring, panels-side memory
+  ingestion observability, an optional LLM-backed snapshot resolver,
+  promoting Stage J edge memos from `localStorage` to a server-side
+  table, and "spawn an agent on this version" buttons in the panels.
+  See "Next steps" in `PROJECT_STATUS.md`.
