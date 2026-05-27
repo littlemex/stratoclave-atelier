@@ -94,3 +94,39 @@ async def test_replay_empty_session_returns_empty_stream(
     resp = client.get(f"/api/sessions/{session.session_id}/events")
     assert resp.status_code == 200
     assert resp.text == ""
+
+
+@pytest.mark.asyncio
+async def test_replay_interleaves_user_and_agent_turn_kinds(
+    client: TestClient, store: InMemoryStore
+) -> None:
+    """The chat hydration relies on SSE replay returning user ``turn`` and
+    assistant ``agent_turn`` events in seq order. If the order ever
+    deviates the SPA's "user-then-assistant" branching bug would come
+    back, so this test pins the contract that hydrate-side ordering
+    fixes depend on.
+    """
+
+    session = await store.create_session(title="branch-replay")
+    for i in range(2):
+        await store.append_event(
+            session_id=session.session_id,
+            kind="turn",
+            payload={"role": "user", "content": f"u{i}"},
+        )
+        await store.append_event(
+            session_id=session.session_id,
+            kind="agent_turn",
+            payload={"role": "assistant", "content": f"a{i}"},
+        )
+
+    resp = client.get(f"/api/sessions/{session.session_id}/events")
+    assert resp.status_code == 200
+    frames = _parse_sse(resp.text)
+    assert [f["id"] for f in frames] == ["0", "1", "2", "3"]
+    assert [f["event"] for f in frames] == [
+        "turn",
+        "agent_turn",
+        "turn",
+        "agent_turn",
+    ]

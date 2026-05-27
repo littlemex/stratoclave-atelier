@@ -87,3 +87,35 @@ def test_stage_j_chat_js_carries_branch_logic(client: TestClient) -> None:
     assert "fork-graph" in body
     assert "EDGE_MEMO_KEY" in body
     assert "layoutDag" in body
+
+
+def test_chat_js_hydrate_renders_agent_turn(client: TestClient) -> None:
+    """Hydration must consume both ``turn`` and ``agent_turn`` events.
+
+    The previous version filtered to ``event === "turn"`` only, dropping
+    historical assistant messages from the chat log. Live SSE then
+    re-emitted them after every user turn, producing the
+    ``user/user/assistant/assistant`` clustering bug after a fork. We
+    pin the fix by asserting the source carries the dual-kind branch.
+    """
+
+    resp = client.get("/static/js/chat.js")
+    assert resp.status_code == 200
+    body = resp.text
+    assert 'currentEvent === "turn" || currentEvent === "agent_turn"' in body
+
+
+def test_chat_js_attaches_event_stream_with_resume_seq(client: TestClient) -> None:
+    """The live tail must resume from ``lastSeenSeq + 1``.
+
+    Without a resume cursor SSE replays from ``from_seq=0``, which causes
+    every historical event to be re-emitted as if it were live -- the
+    ordering bug surfaces immediately after a fork because hydration
+    fills the log first, then SSE doubles every turn.
+    """
+
+    resp = client.get("/static/js/chat.js")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "attachEventStream(session.session_id, lastSeenSeq + 1)" in body
+    assert "from_seq=${start}" in body

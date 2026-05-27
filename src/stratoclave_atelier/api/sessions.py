@@ -40,6 +40,7 @@ from stratoclave_atelier.api.schemas import (
     SessionFork,
     SessionFreeze,
     SessionRead,
+    SessionUpdate,
     TurnAppend,
     VersionRead,
 )
@@ -117,6 +118,29 @@ async def get_session(session_id: UUID, store: StoreDep) -> SessionRead:
         session = await store.get_session(session_id)
     except NotFoundError as exc:
         raise http_not_found(exc) from exc
+    return SessionRead.from_domain(session)
+
+
+@router.patch("/{session_id}", response_model=SessionRead)
+async def update_session(
+    session_id: UUID,
+    payload: SessionUpdate,
+    store: StoreDep,
+) -> SessionRead:
+    """Rename a session.
+
+    Powers DAG-node and breadcrumb rename: the chat shell sends a
+    ``PATCH`` with the new title and re-renders the merged graph from
+    the response. ``title`` is normalised at the store layer (trimmed +
+    length-checked); empty / whitespace-only titles surface as 409.
+    """
+
+    try:
+        session = await store.update_session_title(session_id, payload.title)
+    except NotFoundError as exc:
+        raise http_not_found(exc) from exc
+    except ConflictError as exc:
+        raise http_conflict(exc) from exc
     return SessionRead.from_domain(session)
 
 

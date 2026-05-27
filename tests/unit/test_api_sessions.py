@@ -52,6 +52,36 @@ def test_get_unknown_session_returns_404(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def test_patch_session_renames_title(client: TestClient) -> None:
+    created = client.post("/api/sessions", json={"title": "auto"}).json()
+    resp = client.patch(
+        f"/api/sessions/{created['session_id']}",
+        json={"title": "  hand-curated  "},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["title"] == "hand-curated"
+    again = client.get(f"/api/sessions/{created['session_id']}").json()
+    assert again["title"] == "hand-curated"
+
+
+def test_patch_session_rejects_empty_title(client: TestClient) -> None:
+    created = client.post("/api/sessions", json={"title": "auto"}).json()
+    resp = client.patch(
+        f"/api/sessions/{created['session_id']}",
+        json={"title": "   "},
+    )
+    # pydantic min_length=1 sees the raw whitespace string as length 3, so
+    # the request passes schema validation; the store-side strip then
+    # surfaces the empty title as a 409 conflict.
+    assert resp.status_code == 409
+
+
+def test_patch_unknown_session_returns_404(client: TestClient) -> None:
+    resp = client.patch(f"/api/sessions/{uuid4()}", json={"title": "x"})
+    assert resp.status_code == 404
+
+
 async def _seed_parent_with_version(store: InMemoryStore) -> tuple[str, str]:
     parent = await store.create_session(title="parent")
     version = await store.create_version(

@@ -346,6 +346,7 @@ a:hover {
     flex: 1 1 auto;
     display: flex;
     min-height: 0;
+    --dag-pane-width: 320px;
 }
 
 .chat-layout .chat-main {
@@ -353,13 +354,31 @@ a:hover {
     min-width: 0;
 }
 
+.dag-resizer {
+    flex: 0 0 6px;
+    cursor: col-resize;
+    background: var(--border);
+    border-left: 1px solid var(--surface);
+    border-right: 1px solid var(--surface);
+    transition: background 120ms ease;
+    user-select: none;
+}
+
+.dag-resizer:hover,
+.dag-resizer.is-dragging,
+.dag-resizer:focus-visible {
+    background: var(--accent);
+    outline: none;
+}
+
 .chat-fork-dag {
-    flex: 0 0 280px;
+    flex: 0 0 var(--dag-pane-width);
     display: flex;
     flex-direction: column;
-    border-left: 1px solid var(--border);
     background: var(--surface);
     overflow: hidden;
+    min-width: 220px;
+    max-width: 80vw;
 }
 
 .chat-fork-dag .dag-header {
@@ -368,6 +387,11 @@ a:hover {
     justify-content: space-between;
     padding: 10px 14px;
     border-bottom: 1px solid var(--border);
+}
+
+.chat-fork-dag .dag-header-actions {
+    display: inline-flex;
+    gap: 6px;
 }
 
 .chat-fork-dag h2 {
@@ -379,7 +403,8 @@ a:hover {
     color: var(--muted);
 }
 
-.chat-fork-dag #button-dag-refresh {
+.chat-fork-dag #button-dag-refresh,
+.chat-fork-dag #button-dag-fit {
     background: var(--surface-2);
     color: var(--text);
     border: 1px solid var(--border);
@@ -387,9 +412,11 @@ a:hover {
     padding: 3px 8px;
     cursor: pointer;
     font-size: 11px;
+    font-family: inherit;
 }
 
-.chat-fork-dag #button-dag-refresh:hover {
+.chat-fork-dag #button-dag-refresh:hover,
+.chat-fork-dag #button-dag-fit:hover {
     background: var(--border);
 }
 

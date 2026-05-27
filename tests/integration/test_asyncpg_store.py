@@ -133,6 +133,20 @@ async def test_update_session_status(store: AsyncpgStore) -> None:
     assert updated.status == "frozen"
 
 
+async def test_update_session_title_persists(store: AsyncpgStore) -> None:
+    session = await store.create_session(title="auto")
+    renamed = await store.update_session_title(session.session_id, "  manual  ")
+    assert renamed.title == "manual"
+    fetched = await store.get_session(session.session_id)
+    assert fetched.title == "manual"
+
+
+async def test_update_session_title_rejects_empty(store: AsyncpgStore) -> None:
+    session = await store.create_session(title="t")
+    with pytest.raises(ConflictError, match="title must not be empty"):
+        await store.update_session_title(session.session_id, "   ")
+
+
 # versions ---------------------------------------------------------------------
 
 

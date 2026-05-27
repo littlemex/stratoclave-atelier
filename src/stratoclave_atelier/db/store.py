@@ -64,6 +64,8 @@ class Store(Protocol):
 
     async def update_session_status(self, session_id: UUID, status: SessionStatus) -> Session: ...
 
+    async def update_session_title(self, session_id: UUID, title: str) -> Session: ...
+
     # versions ---------------------------------------------------------------
     async def create_version(
         self,

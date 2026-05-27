@@ -98,6 +98,21 @@ class SessionRead(BaseModel):
         )
 
 
+class SessionUpdate(BaseModel):
+    """Patch a session in place.
+
+    Stage J UI shipped a Fork DAG that surfaces every branch as a node
+    on the right sidebar; the title rendered on each node is the value
+    auto-named at branch time and was previously immutable. This schema
+    powers ``PATCH /api/sessions/{id}`` so users can rename a node after
+    the fact -- handy when the auto-namer's first pass is stale or
+    cryptic. Only ``title`` is exposed for now; status / backend remain
+    write-once via their dedicated endpoints.
+    """
+
+    title: str = Field(..., min_length=1, max_length=200)
+
+
 class SessionFork(BaseModel):
     """Fork a child session from a frozen version + turn.
 
