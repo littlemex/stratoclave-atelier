@@ -194,6 +194,27 @@ class AsyncpgStore(Store):
             raise NotFoundError(f"session {session_id} not found")
         return _row_to_session(row)
 
+    async def update_session_title(self, session_id: UUID, title: str) -> Session:
+        normalised = title.strip()
+        if not normalised:
+            raise ConflictError("title must not be empty")
+        if len(normalised) > 200:
+            raise ConflictError("title must be <= 200 characters")
+        async with self._engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "UPDATE sessions SET title = :title, updated_at = now() "
+                        "WHERE session_id = :sid "
+                        f"RETURNING {self._SESSION_COLUMNS}"
+                    ),
+                    {"sid": session_id, "title": normalised},
+                )
+            ).one_or_none()
+        if row is None:
+            raise NotFoundError(f"session {session_id} not found")
+        return _row_to_session(row)
+
     # versions ---------------------------------------------------------------
     async def create_version(
         self,

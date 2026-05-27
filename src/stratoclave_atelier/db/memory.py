@@ -172,6 +172,31 @@ class InMemoryStore(Store):
             self._sessions[session_id] = updated
             return updated
 
+    async def update_session_title(self, session_id: UUID, title: str) -> Session:
+        normalised = title.strip()
+        if not normalised:
+            raise ConflictError("title must not be empty")
+        if len(normalised) > 200:
+            raise ConflictError("title must be <= 200 characters")
+        async with self._lock:
+            current = self._sessions.get(session_id)
+            if current is None:
+                raise NotFoundError(f"session {session_id} not found")
+            updated = Session(
+                session_id=current.session_id,
+                group_id=current.group_id,
+                title=normalised,
+                parent_session_id=current.parent_session_id,
+                parent_version_id=current.parent_version_id,
+                fork_seq=current.fork_seq,
+                status=current.status,
+                created_at=current.created_at,
+                updated_at=self._now(),
+                agent_backend=current.agent_backend,
+            )
+            self._sessions[session_id] = updated
+            return updated
+
     # versions ---------------------------------------------------------------
     async def create_version(
         self,

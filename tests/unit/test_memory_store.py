@@ -66,6 +66,33 @@ async def test_update_session_status(store: InMemoryStore) -> None:
     assert updated.updated_at >= session.created_at
 
 
+async def test_update_session_title_renames(store: InMemoryStore) -> None:
+    session = await store.create_session(title="auto-name")
+    renamed = await store.update_session_title(session.session_id, "  manual title  ")
+    assert renamed.title == "manual title"
+    assert renamed.session_id == session.session_id
+    assert renamed.updated_at >= session.created_at
+    fetched = await store.get_session(session.session_id)
+    assert fetched.title == "manual title"
+
+
+async def test_update_session_title_rejects_empty(store: InMemoryStore) -> None:
+    session = await store.create_session(title="t")
+    with pytest.raises(ConflictError, match="title must not be empty"):
+        await store.update_session_title(session.session_id, "   ")
+
+
+async def test_update_session_title_rejects_too_long(store: InMemoryStore) -> None:
+    session = await store.create_session(title="t")
+    with pytest.raises(ConflictError, match="<= 200"):
+        await store.update_session_title(session.session_id, "x" * 201)
+
+
+async def test_update_session_title_unknown_session(store: InMemoryStore) -> None:
+    with pytest.raises(NotFoundError, match=r"session .* not found"):
+        await store.update_session_title(uuid4(), "anything")
+
+
 # versions ---------------------------------------------------------------------
 
 

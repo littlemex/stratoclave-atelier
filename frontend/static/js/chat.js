@@ -16,6 +16,9 @@
 // server round-trip.
 
 const EDGE_MEMO_KEY = "atelier:fork-edge-memos";
+const DAG_PANE_WIDTH_KEY = "atelier:dag-pane-width";
+const DAG_PANE_WIDTH_MIN = 220;
+const DAG_PANE_WIDTH_DEFAULT = 320;
 
 const state = {
     sessionId: null,
@@ -34,8 +37,14 @@ const state = {
     /**
      * Stage J: the latest fork-graph payload for the current group. ``null``
      * means "no group / not yet loaded".
+     *
+     * Stage J+: when the operator hops between branches we *merge* the
+     * latest server snapshot into ``mergedGraph`` instead of overwriting it
+     * so the DAG stays sticky -- jumping to the parent should not erase
+     * the children we just rendered.
      */
     forkGraph: null,
+    mergedGraph: { nodes: new Map(), edges: new Map() },
     pendingBranchSeq: null,
     pendingMemoEdge: null,
     /** Map of "<parent>:<child>" -> memo string, mirrored to localStorage. */
@@ -186,47 +195,66 @@ async function setActiveSession(session, { pushHistory = false } = {}) {
     state.streamingAssistantText = null;
 
     // Hydrate previous turns (if the session has any) before live-tailing.
+    // The highest seq we render here becomes the live-tail starting point so
+    // SSE replay does not double-render history (which previously caused
+    // user/assistant grouping after a fork rather than interleaving).
+    let lastSeenSeq = -1;
     try {
-        await hydrateSessionTurns(session.session_id);
+        lastSeenSeq = await hydrateSessionTurns(session.session_id);
     } catch (err) {
         // Hydration failure shouldn't break the chat; we just lose the
-        // historical messages and proceed to live-tail.
+        // historical messages and proceed to live-tail from seq=0.
     }
-    attachEventStream(session.session_id);
+    attachEventStream(session.session_id, lastSeenSeq + 1);
     await renderBreadcrumb(session);
     await refreshForkGraph();
 }
 
 async function hydrateSessionTurns(sessionId) {
     // Use the SSE replay endpoint with follow=false to enumerate past
-    // events; we render every "turn" event and skip control kinds.
+    // events. We render user "turn" events and assistant "agent_turn"
+    // events in seq order so the chat log matches the timeline. Returns
+    // the highest seq observed (-1 if none) so the caller can resume
+    // live-tail without re-emitting history.
     const resp = await fetch(
         `/api/sessions/${sessionId}/events?follow=false&from_seq=0`,
     );
     if (!resp.ok) {
-        return;
+        return -1;
     }
     const text = await resp.text();
     // Each SSE record is two lines (event: <kind>\n\ndata: <json>\n\n).
     // We're not following; the body is finite, so a quick line parse works.
     const lines = text.split("\n");
     let currentEvent = null;
+    let lastSeq = -1;
     for (const line of lines) {
         if (line.startsWith("event:")) {
             currentEvent = line.slice(6).trim();
         } else if (line.startsWith("data:") && currentEvent) {
             const payload = JSON.parse(line.slice(5).trim());
-            if (currentEvent === "turn") {
-                renderHistoricalTurn(payload);
+            if (currentEvent === "turn" || currentEvent === "agent_turn") {
+                renderHistoricalTurn(currentEvent, payload);
+            }
+            if (typeof payload.seq === "number" && payload.seq > lastSeq) {
+                lastSeq = payload.seq;
             }
             currentEvent = null;
         }
     }
+    return lastSeq;
 }
 
-function renderHistoricalTurn(event) {
+function renderHistoricalTurn(kind, event) {
     const payload = event.payload || {};
-    const role = payload.role === "user" ? "user" : "assistant";
+    let role;
+    if (kind === "agent_turn") {
+        role = "assistant";
+    } else if (payload.role === "user") {
+        role = "user";
+    } else {
+        role = "assistant";
+    }
     appendMessage({
         role,
         content: payload.content || "",
@@ -361,8 +389,9 @@ function lockBackendPicker(locked) {
 // SSE streaming
 // ---------------------------------------------------------------------------
 
-function attachEventStream(sessionId) {
-    const url = `/api/sessions/${sessionId}/events?follow=true&from_seq=0`;
+function attachEventStream(sessionId, fromSeq = 0) {
+    const start = Number.isFinite(fromSeq) && fromSeq >= 0 ? fromSeq : 0;
+    const url = `/api/sessions/${sessionId}/events?follow=true&from_seq=${start}`;
     const source = new EventSource(url);
     state.eventSource = source;
 
@@ -429,6 +458,17 @@ function onAgentChunk(event) {
 
 function onAgentTurn(event) {
     const payload = event.payload || {};
+    // Defensive: if hydrate already rendered this assistant turn, skip the
+    // SSE replay so we never double-render. The `from_seq=lastSeq+1` knob
+    // in attachEventStream should make this impossible, but the guard
+    // protects against future regressions in either direction.
+    if (
+        event.seq !== undefined &&
+        event.seq !== null &&
+        chatLog().querySelector(`[data-seq="${event.seq}"]`)
+    ) {
+        return;
+    }
     const finalText = payload.content || state.streamingAssistantText || "";
     if (state.streamingAssistantEl !== null) {
         state.streamingAssistantEl.textContent = finalText;
@@ -594,6 +634,10 @@ async function renderBreadcrumb(session) {
         const cur = document.createElement("span");
         cur.className = "crumb-current";
         cur.textContent = session.title || shortId(session.session_id);
+        cur.title = "Double-click to rename";
+        cur.addEventListener("dblclick", () =>
+            renamePromptForSession(session.session_id, session.title || ""),
+        );
         nav.appendChild(cur);
         return;
     }
@@ -609,6 +653,10 @@ async function renderBreadcrumb(session) {
             const cur = document.createElement("span");
             cur.className = "crumb-current";
             cur.textContent = s.title || shortId(s.session_id);
+            cur.title = "Double-click to rename";
+            cur.addEventListener("dblclick", () =>
+                renamePromptForSession(s.session_id, s.title || ""),
+            );
             nav.appendChild(cur);
         } else {
             const btn = document.createElement("button");
@@ -650,6 +698,9 @@ async function refreshForkGraph() {
     const dagEmpty = document.getElementById("dag-empty");
     const svg = document.getElementById("dag-svg");
     if (!state.sessionId) {
+        // Keep mergedGraph as-is so a "New session" doesn't wipe the
+        // children we already know about; just hide the SVG until the
+        // user picks a session again.
         state.forkGraph = null;
         dagEmpty.removeAttribute("hidden");
         svg.setAttribute("hidden", "");
@@ -657,30 +708,55 @@ async function refreshForkGraph() {
     }
     const session = state.sessionsCache.get(state.sessionId);
     const groupId = session ? session.group_id : null;
+    let snapshot;
     if (!groupId) {
         // No group: build a synthetic single-node graph from the
         // ancestry. The session-by-session endpoint suffices.
-        state.forkGraph = await buildSyntheticGraph(state.sessionId);
+        snapshot = await buildSyntheticGraph(state.sessionId);
     } else {
         try {
-            state.forkGraph = await api("GET", `/api/groups/${groupId}/fork-graph`);
+            snapshot = await api("GET", `/api/groups/${groupId}/fork-graph`);
         } catch (err) {
-            state.forkGraph = await buildSyntheticGraph(state.sessionId);
+            snapshot = await buildSyntheticGraph(state.sessionId);
         }
     }
-    if (!state.forkGraph || state.forkGraph.nodes.length === 0) {
+    state.forkGraph = snapshot;
+    mergeForkGraph(snapshot);
+    const merged = mergedGraphAsPayload();
+    if (!merged.nodes.length) {
         dagEmpty.removeAttribute("hidden");
         svg.setAttribute("hidden", "");
         return;
     }
-    if (state.forkGraph.nodes.length <= 1 && state.forkGraph.edges.length === 0) {
+    if (merged.nodes.length <= 1 && merged.edges.length === 0) {
         dagEmpty.removeAttribute("hidden");
         svg.setAttribute("hidden", "");
         return;
     }
     dagEmpty.setAttribute("hidden", "");
     svg.removeAttribute("hidden");
-    renderDag(state.forkGraph);
+    renderDag(merged);
+}
+
+function mergeForkGraph(graph) {
+    if (!graph) return;
+    for (const n of graph.nodes || []) {
+        // Latest snapshot wins per session id (title / status / versions
+        // are the freshest). Parent pointers are immutable, so the merge
+        // is a simple overwrite.
+        state.mergedGraph.nodes.set(n.session_id, n);
+    }
+    for (const e of graph.edges || []) {
+        const key = `${e.parent_session_id}:${e.child_session_id}`;
+        state.mergedGraph.edges.set(key, e);
+    }
+}
+
+function mergedGraphAsPayload() {
+    return {
+        nodes: Array.from(state.mergedGraph.nodes.values()),
+        edges: Array.from(state.mergedGraph.edges.values()),
+    };
 }
 
 async function buildSyntheticGraph(sessionId) {
@@ -825,12 +901,53 @@ function renderDag(graph) {
         );
         text.setAttribute("x", String(pos.x + 10));
         text.setAttribute("y", String(pos.y + nodeHeight / 2 + 4));
-        const title = (n.title || shortId(n.session_id)).slice(0, 22);
+        const fullTitle = n.title || shortId(n.session_id);
+        const title = fullTitle.slice(0, 22);
         text.textContent = title;
         g.appendChild(text);
 
+        const fullTitleNode = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "title",
+        );
+        fullTitleNode.textContent = `${fullTitle} (double-click to rename)`;
+        g.appendChild(fullTitleNode);
+
         g.addEventListener("click", () => navigateToSession(n.session_id));
+        g.addEventListener("dblclick", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            renamePromptForSession(n.session_id, fullTitle);
+        });
         svg.appendChild(g);
+    }
+}
+
+async function renamePromptForSession(sessionId, currentTitle) {
+    const next = window.prompt("Rename node", currentTitle || "");
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === currentTitle) return;
+    if (trimmed.length > 200) {
+        flash("Title too long (max 200 chars)");
+        return;
+    }
+    try {
+        const updated = await api("PATCH", `/api/sessions/${sessionId}`, {
+            title: trimmed,
+        });
+        state.sessionsCache.set(updated.session_id, updated);
+        const node = state.mergedGraph.nodes.get(sessionId);
+        if (node) {
+            state.mergedGraph.nodes.set(sessionId, { ...node, title: updated.title });
+        }
+        if (state.sessionId === sessionId) {
+            await renderBreadcrumb(updated);
+        }
+        renderDag(mergedGraphAsPayload());
+        flash("Renamed");
+    } catch (err) {
+        flash(`Rename failed: ${err.message || err}`);
     }
 }
 
@@ -947,6 +1064,97 @@ function cancelEdgeMemo() {
 }
 
 // ---------------------------------------------------------------------------
+// Stage J+: DAG pane resizer (drag the divider between chat and DAG)
+// ---------------------------------------------------------------------------
+
+function initDagResizer() {
+    const resizer = document.getElementById("dag-resizer");
+    const layout = document.querySelector(".chat-layout");
+    if (!resizer || !layout) return;
+
+    const stored = Number(localStorage.getItem(DAG_PANE_WIDTH_KEY));
+    if (Number.isFinite(stored) && stored >= DAG_PANE_WIDTH_MIN) {
+        applyDagPaneWidth(stored);
+    }
+
+    let dragging = false;
+
+    function onMove(ev) {
+        if (!dragging) return;
+        ev.preventDefault();
+        const rect = layout.getBoundingClientRect();
+        // Pane width = right edge of layout minus pointer X.
+        let next = rect.right - ev.clientX;
+        const max = Math.max(DAG_PANE_WIDTH_MIN, rect.width - 320);
+        if (next < DAG_PANE_WIDTH_MIN) next = DAG_PANE_WIDTH_MIN;
+        if (next > max) next = max;
+        applyDagPaneWidth(next);
+    }
+
+    function onUp() {
+        if (!dragging) return;
+        dragging = false;
+        resizer.classList.remove("is-dragging");
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        const current = currentDagPaneWidth();
+        if (current >= DAG_PANE_WIDTH_MIN) {
+            localStorage.setItem(DAG_PANE_WIDTH_KEY, String(Math.round(current)));
+        }
+        if (state.forkGraph || state.mergedGraph.nodes.size > 0) {
+            renderDag(mergedGraphAsPayload());
+        }
+    }
+
+    resizer.addEventListener("mousedown", (ev) => {
+        ev.preventDefault();
+        dragging = true;
+        resizer.classList.add("is-dragging");
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+    });
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+
+    // Keyboard handle: arrow keys nudge the pane in 24px steps.
+    resizer.addEventListener("keydown", (ev) => {
+        const step = ev.shiftKey ? 80 : 24;
+        if (ev.key === "ArrowLeft") {
+            applyDagPaneWidth(currentDagPaneWidth() + step);
+            ev.preventDefault();
+        } else if (ev.key === "ArrowRight") {
+            applyDagPaneWidth(Math.max(DAG_PANE_WIDTH_MIN, currentDagPaneWidth() - step));
+            ev.preventDefault();
+        } else {
+            return;
+        }
+        localStorage.setItem(
+            DAG_PANE_WIDTH_KEY,
+            String(Math.round(currentDagPaneWidth())),
+        );
+        if (state.forkGraph || state.mergedGraph.nodes.size > 0) {
+            renderDag(mergedGraphAsPayload());
+        }
+    });
+}
+
+function currentDagPaneWidth() {
+    const layout = document.querySelector(".chat-layout");
+    if (!layout) return DAG_PANE_WIDTH_DEFAULT;
+    const styled = getComputedStyle(layout).getPropertyValue("--dag-pane-width");
+    const px = parseFloat(styled);
+    if (Number.isFinite(px) && px > 0) return px;
+    return DAG_PANE_WIDTH_DEFAULT;
+}
+
+function applyDagPaneWidth(px) {
+    const layout = document.querySelector(".chat-layout");
+    if (!layout) return;
+    layout.style.setProperty("--dag-pane-width", `${Math.round(px)}px`);
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
@@ -974,6 +1182,15 @@ function boot() {
     document
         .getElementById("button-dag-refresh")
         .addEventListener("click", refreshForkGraph);
+    const fitBtn = document.getElementById("button-dag-fit");
+    if (fitBtn) {
+        fitBtn.addEventListener("click", () => {
+            if (state.forkGraph || state.mergedGraph.nodes.size > 0) {
+                renderDag(mergedGraphAsPayload());
+            }
+        });
+    }
+    initDagResizer();
 
     const input = document.getElementById("chat-input");
     input.addEventListener("keydown", (ev) => {
@@ -1016,5 +1233,7 @@ if (typeof window !== "undefined") {
         state,
         layoutDag,
         loadEdgeMemos,
+        hydrateSessionTurns,
+        attachEventStream,
     };
 }

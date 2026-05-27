@@ -64,6 +64,15 @@
                 <a href="/panels">panels</a>.
             </div>
         </main>
+        <div
+            id="dag-resizer"
+            class="dag-resizer"
+            data-testid="dag-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize Fork DAG pane"
+            tabindex="0"
+        ></div>
         <aside
             id="chat-fork-dag"
             class="chat-fork-dag"
@@ -72,14 +81,24 @@
         >
             <header class="dag-header">
                 <h2>Fork DAG</h2>
-                <button
-                    type="button"
-                    id="button-dag-refresh"
-                    data-testid="dag-refresh"
-                    title="Reload the fork graph"
-                >
-                    Refresh
-                </button>
+                <div class="dag-header-actions">
+                    <button
+                        type="button"
+                        id="button-dag-fit"
+                        data-testid="dag-fit"
+                        title="Fit DAG to pane width"
+                    >
+                        Fit
+                    </button>
+                    <button
+                        type="button"
+                        id="button-dag-refresh"
+                        data-testid="dag-refresh"
+                        title="Reload the fork graph"
+                    >
+                        Refresh
+                    </button>
+                </div>
             </header>
             <div
                 id="dag-empty"
