@@ -61,6 +61,12 @@ class AgentRunner:
         # Strong refs to in-flight asyncio tasks so they survive GC while
         # the SSE stream consumes their output.
         self._tasks: set[asyncio.Task[None]] = set()
+        # Stage K: one-shot memory blocks adopted by the user via the
+        # cross-session "ask another session" panel. Keyed by atelier
+        # session id; consumed by the next ``run()`` and cleared. Lives
+        # in-process intentionally -- adoptions are inherently
+        # session-bound and short-lived.
+        self._pending_memory: dict[UUID, str] = {}
 
     @property
     def enabled(self) -> bool:
@@ -117,6 +123,27 @@ class AgentRunner:
             self._sessions[session_id] = session
             return session
 
+    def adopt_memory(self, session_id: UUID, memory_block: str) -> None:
+        """Stash a user-adopted memory block for the next ``run()``.
+
+        Called from ``POST /api/memory/adopt`` after the cross-session
+        panel resolves a query. The block survives until the next agent
+        run for ``session_id`` consumes it; subsequent adoptions
+        overwrite the pending block (we keep the most recent intent).
+        """
+
+        self._pending_memory[session_id] = memory_block
+
+    def peek_pending_memory(self, session_id: UUID) -> str | None:
+        """Return the pending block without clearing it (for the SPA badge)."""
+
+        return self._pending_memory.get(session_id)
+
+    def clear_pending_memory(self, session_id: UUID) -> str | None:
+        """Pop and return the pending block, if any."""
+
+        return self._pending_memory.pop(session_id, None)
+
     async def run(
         self,
         *,
@@ -134,6 +161,12 @@ class AgentRunner:
         the caller. ``backend`` overrides the server-default loom
         backend at session-warmup time (Stage H per-session selection);
         once a session is warm the choice is sticky.
+
+        Stage K: a *user-adopted* memory block (from the cross-session
+        "@" panel) takes precedence over the auto-retrieved one. The
+        pending block is consumed regardless of whether
+        ``agent_memory_enabled`` is true so adopt-then-disable does not
+        silently swallow the user's intent.
         """
 
         if not self.enabled:
@@ -144,19 +177,34 @@ class AgentRunner:
 
         session = await self._ensure_session(session_id, backend=backend)
 
-        # Memory retrieval is best-effort and never blocks the run: any
-        # failure inside the memory service is logged and swallowed.
-        if memory_context is None and self._config.agent_memory_enabled and self._memory.enabled:
-            try:
-                memory_context = await self._memory.retrieve(query=prompt)
-            except Exception:
-                logger.exception("memory retrieve failed for session %s", session_id)
-                memory_context = None
+        memory_source: str | None
+        if memory_context is not None:
+            memory_source = "explicit"
+        else:
+            adopted = self.clear_pending_memory(session_id)
+            if adopted is not None:
+                memory_context = adopted
+                memory_source = "adopted"
+            elif self._config.agent_memory_enabled and self._memory.enabled:
+                # Memory retrieval is best-effort and never blocks the
+                # run: any failure inside the memory service is logged
+                # and swallowed.
+                try:
+                    memory_context = await self._memory.retrieve(query=prompt)
+                except Exception:
+                    logger.exception("memory retrieve failed for session %s", session_id)
+                    memory_context = None
+                memory_source = "auto" if memory_context is not None else None
+            else:
+                memory_source = None
 
         full_prompt = self._compose_prompt(prompt, memory_context)
 
-        # Persist the user turn first so the timeline is consistent even
-        # if the agent crashes before producing any chunks.
+        # Persist the user turn first so the timeline is consistent
+        # even if the agent crashes before producing any chunks.
+        # ``memory_source`` tells the SPA whether the block came from
+        # auto-retrieval, the cross-session adopt flow, or was passed
+        # in by a CLI caller.
         await self._publish_event(
             session_id=session_id,
             kind="turn",
@@ -165,6 +213,7 @@ class AgentRunner:
                 "role": "user",
                 "content": prompt,
                 "memory_used": memory_context is not None,
+                "memory_source": memory_source,
             },
         )
 

@@ -70,18 +70,28 @@ def _format_retrieval(result: Any) -> str | None:
     """Render a distill ``RetrievalResult`` as a ``<memory>``-ready string.
 
     Empty (no hits in either lane and no conflicts / gaps) returns
-    ``None`` so the caller skips the ``<memory>`` block entirely.
+    ``None`` so the caller skips the ``<memory>`` block entirely. When
+    a hit has a ``source_session`` attribution, the short prefix of the
+    session id is appended so the agent can tell which session the
+    rule came from (useful when the user scoped the query to specific
+    sessions).
     """
+
+    def _attribution(learning: Any) -> str:
+        sid = getattr(learning, "source_session", None)
+        if not sid:
+            return ""
+        return f" (from {str(sid)[:8]})"
 
     lines: list[str] = []
     for hit in getattr(result, "canonical", ()):
         rule = getattr(hit.learning, "rule", "")
         if rule:
-            lines.append(f"[canonical] {rule}")
+            lines.append(f"[canonical] {rule}{_attribution(hit.learning)}")
     for hit in getattr(result, "emerging", ()):
         rule = getattr(hit.learning, "rule", "")
         if rule:
-            lines.append(f"[emerging] {rule}")
+            lines.append(f"[emerging] {rule}{_attribution(hit.learning)}")
     for conflict in getattr(result, "conflicts", ()):
         reason = getattr(conflict, "reason", "")
         if reason:
@@ -238,13 +248,39 @@ class DistillMemoryService:
                 session_id,
             )
 
-    async def retrieve(self, *, query: str, top_k: int = 5) -> str | None:
-        """Embed the prompt and return canonical / emerging hits as a block."""
+    async def retrieve(
+        self,
+        *,
+        query: str,
+        top_k: int = 5,
+        scope_session_ids: Sequence[UUID] | None = None,
+    ) -> str | None:
+        """Embed the prompt and return canonical / emerging hits as a block.
 
+        ``scope_session_ids`` (when set) is forwarded to the distill
+        retriever as a list of stringified UUIDs. An empty sequence
+        short-circuits to ``None`` -- the caller asked for "these
+        sessions only" and provided none, so there is no useful memory
+        to splice into the prompt. ``top_k`` is currently advisory; the
+        retriever uses its own per-lane caps configured at construction
+        time.
+        """
+
+        del top_k
         if self._closed or not query.strip():
             return None
+        if scope_session_ids is not None and len(scope_session_ids) == 0:
+            return None
+        forwarded_ids: tuple[str, ...] | None
+        if scope_session_ids is None:
+            forwarded_ids = None
+        else:
+            forwarded_ids = tuple(str(sid) for sid in scope_session_ids)
         try:
-            result = await self._retriever.retrieve(query)
+            result = await self._retriever.retrieve(
+                query,
+                source_session_ids=forwarded_ids,
+            )
         except Exception:
             logger.exception("distill retrieve failed for query (len=%d)", len(query))
             return None

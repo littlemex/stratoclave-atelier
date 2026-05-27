@@ -1,6 +1,6 @@
 # stratoclave-atelier: Implementation Status
 
-**Last updated**: 2026-05-27 (Stage J)
+**Last updated**: 2026-05-27 (Stage K)
 **Project started**: 2026-05-25
 
 ## Overall progress
@@ -19,6 +19,22 @@
 | H     | Per-session backend selection (claude_code / kiro_code / mock) via UI picker, persisted in `sessions.agent_backend`, validated against operator-allowed list | Done |
 | I     | `DistillSnapshotResolver` (distill-backed snapshot answers) + CLI `session tail` (SSE -> JSON Lines) + `ATELIER_SNAPSHOT_RESOLVER` knob | Done |
 | J     | Branch from chat: `POST /api/sessions/{id}/branch` orchestrator + `AutoNamer` (Loom / Noop) + chat header "Fork now" + per-turn hover + breadcrumb + right-side SVG fork DAG + edge memos in localStorage | Done |
+| K     | Cross-session @ mention: distill `scope_session_ids` end-to-end + `POST /api/memory/{query,adopt}` + raw event search fallback + `AgentRunner._pending_memory` priority chain + chat `@ session` dialog with B/A tabs + memory chip | Done |
+
+### What ships in Stage K (this delta)
+
+| Component | File(s) | State |
+|-----------|---------|-------|
+| Distill `LearningStore.list_paginated(source_session_ids=)` Protocol param + InMemory + asyncpg implementations | `vendor/stratoclave-distill/src/stratoclave_distill/store.py`, `inmemory.py`, `asyncpg.py` | Done |
+| Distill `Retriever.retrieve(..., source_session_ids=)` forwarded through canonical / emerging lanes; empty list short-circuits | `vendor/stratoclave-distill/src/stratoclave_distill/retriever.py` | Done |
+| `MemoryService.retrieve(..., scope_session_ids: Sequence[UUID] \| None = None)` Protocol param; `DistillMemoryService` stringifies UUIDs and forwards; empty list short-circuits to `None` | `src/stratoclave_atelier/memory.py`, `_distill_memory.py` | Done |
+| `POST /api/memory/query` (scoped retrieval; `enabled=False` for Noop) | `src/stratoclave_atelier/api/memory.py` | Done |
+| `POST /api/memory/adopt` (202; queues block on AgentRunner; 404 / 409 / 422 error contract); `GET` peek; `DELETE` clear | `src/stratoclave_atelier/api/memory.py` | Done |
+| `GET /api/sessions/{id}/events/search?q=...&kind=turn&limit=10` raw fallback (case-insensitive substring on `_payload_text`) | `src/stratoclave_atelier/api/events.py` | Done |
+| `AgentRunner._pending_memory[session_id]` + `adopt_memory` / `peek_pending_memory` / `clear_pending_memory`; priority chain explicit > adopted > auto > None; user-turn payload carries `memory_source` | `src/stratoclave_atelier/agent_runner.py` | Done |
+| Chat shell: `@ session` header button, `<dialog id="mention-panel">` with B/A tabs (distill scope + raw events), session multi-select, results preview, Adopt-for-next-turn button, memory chip above textarea with × clear | `frontend/static/index.html`, `frontend/static/css/chat.css`, `frontend/static/js/chat.js` | Done |
+| Unit tests: distill scope (retriever short-circuit + multi-session forward) / atelier `MemoryService` scope + AgentRunner pending memory + REST `/memory/{query,adopt}` (UUIDs / 404 / 409 / 422) / Stage K shell + chat.js markers | `vendor/stratoclave-distill/tests/unit/test_retriever_scope.py`, `tests/unit/test_memory.py`, `tests/unit/test_api_memory.py`, `tests/unit/test_frontend_mount.py` | Done |
+| Walkthrough doc | `docs/STAGE_K_WALKTHROUGH.md` | Done |
 
 ### What ships in Stage J (this delta)
 
@@ -231,8 +247,8 @@ These were excluded by explicit project decision (see `HANDOVER.md`):
 
 | Role    | Owner    | Status   | Current task                   |
 |---------|----------|----------|--------------------------------|
-| Backend | (lead)   | Active   | Stage J shipped: `POST /branch` + `AutoNamer` (Loom/Noop) + memory ingest on freeze; push pending |
-| UI      | (lead)   | Active   | Stage J shipped: header `Fork now`, per-turn `Branch from here`, breadcrumb, fork DAG sidebar, edge-memo dialog; auth still pending |
+| Backend | (lead)   | Active   | Stage K shipped: distill scope + `POST /api/memory/{query,adopt}` + AgentRunner pending memory; push pending |
+| UI      | (lead)   | Active   | Stage K shipped: `@ session` dialog with B/A tabs + memory chip above input; auth still pending |
 
 ## Next steps (priority order)
 

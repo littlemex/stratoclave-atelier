@@ -105,6 +105,41 @@ def test_chat_js_hydrate_renders_agent_turn(client: TestClient) -> None:
     assert 'currentEvent === "turn" || currentEvent === "agent_turn"' in body
 
 
+def test_stage_k_shell_elements_are_present(client: TestClient) -> None:
+    """Stage K: header @ button + memory chip + mention dialog with B/A tabs."""
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    body = resp.text
+    assert 'id="button-mention"' in body
+    assert 'data-testid="chat-mention"' in body
+    assert 'id="memory-chip"' in body
+    assert 'id="memory-chip-clear"' in body
+    assert 'id="mention-panel"' in body
+    assert 'id="mention-tab-distill"' in body
+    assert 'id="mention-tab-raw"' in body
+    assert 'id="mention-distill-sessions"' in body
+    assert 'id="mention-distill-query"' in body
+    assert 'id="mention-raw-session"' in body
+    assert 'id="mention-raw-query"' in body
+    assert 'id="mention-results"' in body
+    assert 'id="mention-adopt"' in body
+
+
+def test_stage_k_chat_js_carries_mention_logic(client: TestClient) -> None:
+    """The chat module ships the mention panel + adopt orchestration."""
+
+    resp = client.get("/static/js/chat.js")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "/api/memory/query" in body
+    assert "/api/memory/adopt" in body
+    assert "openMentionPanel" in body
+    assert "runDistillSearch" in body
+    assert "runRawSearch" in body
+    assert "renderMemoryChip" in body
+
+
 def test_chat_js_attaches_event_stream_with_resume_seq(client: TestClient) -> None:
     """The live tail must resume from ``lastSeenSeq + 1``.
 
