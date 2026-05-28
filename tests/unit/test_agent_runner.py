@@ -293,3 +293,197 @@ async def test_runner_publishes_to_bus(
     assert "agent_chunk" in kinds
     assert "agent_turn" in kinds
     await runner.close()
+
+
+# ---------------------------------------------------------------------------
+# cwd isolation: per-session directory + branch seeding
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_session_cwd_per_session_creates_subdir(
+    stub_env: Mapping[str, str], tmp_path: Any
+) -> None:
+    """Default isolation = per_session: each atelier session_id gets its own dir."""
+
+    from pathlib import Path
+    from uuid import uuid4
+
+    cfg = AtelierConfig.from_env(
+        {
+            **stub_env,
+            "ATELIER_AGENT_BACKEND": "claude_code",
+            "ATELIER_AGENT_CWD": str(tmp_path),
+        },
+    )
+    runner = AgentRunner(config=cfg, store=InMemoryStore(), bus=EventBus())
+
+    sid_a = uuid4()
+    sid_b = uuid4()
+    cwd_a = runner.resolve_session_cwd(sid_a)
+    cwd_b = runner.resolve_session_cwd(sid_b)
+
+    assert cwd_a != cwd_b
+    assert Path(cwd_a).is_dir()
+    assert Path(cwd_b).is_dir()
+    assert Path(cwd_a).parent.name == "sessions"
+    assert Path(cwd_a).name == str(sid_a)
+
+
+def test_resolve_session_cwd_shared_returns_base(
+    stub_env: Mapping[str, str], tmp_path: Any
+) -> None:
+    """Opt-in shared mode keeps Stage G behaviour: every session uses the base dir."""
+
+    from uuid import uuid4
+
+    cfg = AtelierConfig.from_env(
+        {
+            **stub_env,
+            "ATELIER_AGENT_BACKEND": "claude_code",
+            "ATELIER_AGENT_CWD": str(tmp_path),
+            "ATELIER_AGENT_CWD_ISOLATION": "shared",
+        },
+    )
+    runner = AgentRunner(config=cfg, store=InMemoryStore(), bus=EventBus())
+    sid_a = uuid4()
+    sid_b = uuid4()
+    assert runner.resolve_session_cwd(sid_a) == str(tmp_path)
+    assert runner.resolve_session_cwd(sid_b) == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_seed_branch_cwd_copies_parent_tree(
+    stub_env: Mapping[str, str], tmp_path: Any
+) -> None:
+    """Branch flow: child cwd inherits the parent's files at fork time, then diverges."""
+
+    from pathlib import Path
+    from uuid import uuid4
+
+    cfg = AtelierConfig.from_env(
+        {
+            **stub_env,
+            "ATELIER_AGENT_BACKEND": "claude_code",
+            "ATELIER_AGENT_CWD": str(tmp_path),
+        },
+    )
+    runner = AgentRunner(config=cfg, store=InMemoryStore(), bus=EventBus())
+
+    parent_id = uuid4()
+    child_id = uuid4()
+
+    parent_cwd = Path(runner.resolve_session_cwd(parent_id))
+    # Simulate the agent persisting some state in the parent cwd.
+    (parent_cwd / "memory").mkdir()
+    (parent_cwd / "memory" / "user_name.md").write_text("name: satoshi\n")
+    (parent_cwd / "scratch.txt").write_text("hello")
+
+    await runner.seed_branch_cwd(parent_session_id=parent_id, child_session_id=child_id)
+
+    child_cwd = Path(runner.resolve_session_cwd(child_id))
+    assert (child_cwd / "memory" / "user_name.md").read_text() == "name: satoshi\n"
+    assert (child_cwd / "scratch.txt").read_text() == "hello"
+
+    # After branch, writes to child must NOT propagate to parent.
+    (child_cwd / "memory" / "mother.md").write_text("mother: karin\n")
+    assert not (parent_cwd / "memory" / "mother.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_seed_branch_cwd_copies_claude_project_memory(
+    stub_env: Mapping[str, str], tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Branch flow also copies ~/.claude/projects/<slug>/memory.
+
+    Claude Code persists per-project memory keyed by realpath(cwd) ->
+    slug, *outside* the cwd. Without copying that dir the per-session
+    cwd isolation accidentally erases the parent's learned facts at
+    fork time.
+    """
+
+    from pathlib import Path
+    from uuid import uuid4
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    cfg = AtelierConfig.from_env(
+        {
+            **stub_env,
+            "ATELIER_AGENT_BACKEND": "claude_code",
+            "ATELIER_AGENT_CWD": str(tmp_path / "agent"),
+        },
+    )
+    runner = AgentRunner(config=cfg, store=InMemoryStore(), bus=EventBus())
+
+    parent_id = uuid4()
+    child_id = uuid4()
+    parent_cwd = Path(runner.resolve_session_cwd(parent_id))
+
+    parent_real = parent_cwd.resolve()  # noqa: ASYNC240 -- test-only sync stat
+    parent_slug = str(parent_real).replace("/", "-")
+    parent_mem = fake_home / ".claude" / "projects" / parent_slug / "memory"
+    parent_mem.mkdir(parents=True)
+    (parent_mem / "MEMORY.md").write_text("- favourite color: blue\n")
+    (parent_mem / "user_color.md").write_text("blue (青)\n")
+
+    await runner.seed_branch_cwd(parent_session_id=parent_id, child_session_id=child_id)
+
+    child_cwd = Path(runner.resolve_session_cwd(child_id))
+    child_slug = str(child_cwd.resolve()).replace("/", "-")  # noqa: ASYNC240
+    child_mem = fake_home / ".claude" / "projects" / child_slug / "memory"
+    assert (child_mem / "MEMORY.md").read_text() == "- favourite color: blue\n"
+    assert (child_mem / "user_color.md").read_text() == "blue (青)\n"
+
+    # Subsequent writes by the child must not propagate back to parent.
+    (child_mem / "user_color.md").write_text("red\n")
+    assert (parent_mem / "user_color.md").read_text() == "blue (青)\n"
+
+
+@pytest.mark.asyncio
+async def test_seed_branch_cwd_noop_when_no_claude_memory(
+    stub_env: Mapping[str, str], tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing ~/.claude/projects/.../memory must not raise."""
+
+    from pathlib import Path
+    from uuid import uuid4
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    cfg = AtelierConfig.from_env(
+        {
+            **stub_env,
+            "ATELIER_AGENT_BACKEND": "claude_code",
+            "ATELIER_AGENT_CWD": str(tmp_path / "agent"),
+        },
+    )
+    runner = AgentRunner(config=cfg, store=InMemoryStore(), bus=EventBus())
+    # Warm parent cwd but never create the Claude project dir.
+    parent_id = uuid4()
+    runner.resolve_session_cwd(parent_id)
+
+    await runner.seed_branch_cwd(parent_session_id=parent_id, child_session_id=uuid4())
+
+
+@pytest.mark.asyncio
+async def test_seed_branch_cwd_noop_when_shared(stub_env: Mapping[str, str], tmp_path: Any) -> None:
+    """``shared`` isolation: no copy is performed (single shared cwd)."""
+
+    from uuid import uuid4
+
+    cfg = AtelierConfig.from_env(
+        {
+            **stub_env,
+            "ATELIER_AGENT_BACKEND": "claude_code",
+            "ATELIER_AGENT_CWD": str(tmp_path),
+            "ATELIER_AGENT_CWD_ISOLATION": "shared",
+        },
+    )
+    runner = AgentRunner(config=cfg, store=InMemoryStore(), bus=EventBus())
+
+    # Should not raise, even though parent_cwd == child_cwd in shared mode.
+    await runner.seed_branch_cwd(parent_session_id=uuid4(), child_session_id=uuid4())

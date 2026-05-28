@@ -456,6 +456,7 @@ All knobs are environment variables. Nothing is hard-coded in `src/`.
 | `ATELIER_AGENT_BACKENDS_ALLOWED` | (unset)                    | Stage H: CSV of backends offered by the chat picker    |
 | `ATELIER_AGENT_CWD`       | (unset)                           | Working dir for backends without per-backend override (required when backend != `none`) |
 | `ATELIER_AGENT_CWD_<BACKEND>` | (unset)                       | Stage H: per-backend cwd override (e.g. `ATELIER_AGENT_CWD_KIRO_CODE`) |
+| `ATELIER_AGENT_CWD_ISOLATION` | `per_session`                 | `per_session` (default) gives every atelier session its own `${cwd}/sessions/${session_id}` dir so Claude memory does not leak across sessions; `shared` reverts to the Stage G single shared cwd |
 | `ATELIER_AGENT_ALLOWED_TOOLS` | (unset)                       | Comma-separated allowlist passed through to loom       |
 | `ATELIER_AGENT_ALLOWED_TOOLS_<BACKEND>` | (unset)             | Stage H: per-backend allowed_tools override            |
 | `ATELIER_AGENT_MEMORY`    | `true`                            | Per-server toggle for memory retrieval on agent runs   |

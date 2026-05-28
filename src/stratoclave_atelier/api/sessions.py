@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Request, status
 
 from stratoclave_atelier.api.deps import (
     AutoNamerDep,
@@ -231,6 +231,7 @@ async def branch_session(
     memory: MemoryServiceDep,
     auto_namer: AutoNamerDep,
     config: ConfigDep,
+    request: Request,
 ) -> SessionBranchResponse:
     """Branch the live session: freeze + auto-name + fork in one call.
 
@@ -304,6 +305,25 @@ async def branch_session(
         raise http_not_found(exc) from exc
     except ConflictError as exc:
         raise http_conflict(exc) from exc
+
+    # Seed the child's per-session cwd from the parent so the agent
+    # inherits Claude memory / project files at the fork point but
+    # diverges from there. Best-effort: a missing AgentRunner (memory
+    # backend disabled) or an unconfigured cwd both no-op silently.
+    runner = getattr(request.app.state, "agent_runner", None)
+    if runner is not None:
+        try:
+            await runner.seed_branch_cwd(
+                parent_session_id=session_id,
+                child_session_id=child.session_id,
+                backend=inherited_backend,
+            )
+        except Exception:  # pragma: no cover -- best-effort
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "seed_branch_cwd failed for child %s", child.session_id
+            )
 
     return SessionBranchResponse(
         child=SessionRead.from_domain(child),

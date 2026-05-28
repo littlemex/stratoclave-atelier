@@ -140,6 +140,33 @@ def test_agent_backend_with_cwd_ok() -> None:
     assert cfg.agent_backend == "claude_code"
     assert cfg.agent_cwd == "/tmp/workspace"
     assert cfg.agent_allowed_tools == ("shell.run", "file.read")
+    # Per-session cwd isolation is the safe default so siblings/branches
+    # do not share Claude Code memory or other on-disk backend state.
+    assert cfg.agent_cwd_isolation == "per_session"
+
+
+def test_agent_cwd_isolation_shared_opt_in() -> None:
+    cfg = AtelierConfig.from_env(
+        {
+            "ATELIER_DATABASE_URL": _DB,
+            "ATELIER_AGENT_BACKEND": "claude_code",
+            "ATELIER_AGENT_CWD": "/tmp/workspace",
+            "ATELIER_AGENT_CWD_ISOLATION": "shared",
+        }
+    )
+    assert cfg.agent_cwd_isolation == "shared"
+
+
+def test_agent_cwd_isolation_invalid_rejected() -> None:
+    with pytest.raises(ConfigError, match="unsupported agent_cwd_isolation"):
+        AtelierConfig.from_env(
+            {
+                "ATELIER_DATABASE_URL": _DB,
+                "ATELIER_AGENT_BACKEND": "claude_code",
+                "ATELIER_AGENT_CWD": "/tmp/workspace",
+                "ATELIER_AGENT_CWD_ISOLATION": "global",
+            }
+        )
 
 
 def test_unknown_agent_backend_rejected() -> None:

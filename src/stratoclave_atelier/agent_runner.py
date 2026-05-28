@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -100,6 +102,35 @@ class AgentRunner:
             "set ATELIER_AGENT_BACKEND or pass agent_backend on session creation"
         )
 
+    def resolve_session_cwd(self, session_id: UUID, *, backend: str | None = None) -> str:
+        """Return the on-disk cwd a given atelier session should run in.
+
+        When :attr:`AtelierConfig.agent_cwd_isolation` is ``"per_session"``
+        the cwd is ``${base}/sessions/${session_id}`` so that any state
+        the backend persists alongside its cwd (Claude Code's auto-memory,
+        ``.claude/projects/`` transcripts, etc.) does not leak across
+        atelier sessions or across parent/child branches. ``"shared"``
+        keeps the Stage G behaviour and returns the configured base
+        directly.
+
+        The returned directory is created on demand. Raises
+        :class:`RuntimeError` when no base cwd is configured.
+        """
+
+        backend_name = self._resolve_backend_for(backend)
+        base = self._config.cwd_for_backend(backend_name)
+        if not base:
+            raise RuntimeError(
+                f"agent_cwd is not configured for backend {backend_name!r}; "
+                f"set ATELIER_AGENT_CWD_{backend_name.upper()} or ATELIER_AGENT_CWD"
+            )
+        if self._config.agent_cwd_isolation == "shared":
+            cwd_path = Path(base)
+        else:
+            cwd_path = Path(base) / "sessions" / str(session_id)
+        cwd_path.mkdir(parents=True, exist_ok=True)
+        return str(cwd_path)
+
     async def _ensure_session(
         self, session_id: UUID, *, backend: str | None = None
     ) -> AgentSession:
@@ -108,12 +139,7 @@ class AgentRunner:
             if existing is not None:
                 return existing
             backend_name = self._resolve_backend_for(backend)
-            cwd = self._config.cwd_for_backend(backend_name)
-            if not cwd:
-                raise RuntimeError(
-                    f"agent_cwd is not configured for backend {backend_name!r}; "
-                    f"set ATELIER_AGENT_CWD_{backend_name.upper()} or ATELIER_AGENT_CWD"
-                )
+            cwd = self.resolve_session_cwd(session_id, backend=backend_name)
             cfg = BackendConfig(
                 backend=backend_name,
                 cwd=cwd,
@@ -122,6 +148,96 @@ class AgentRunner:
             session = create_session(cfg, session_id=str(session_id))
             self._sessions[session_id] = session
             return session
+
+    async def seed_branch_cwd(
+        self,
+        *,
+        parent_session_id: UUID,
+        child_session_id: UUID,
+        backend: str | None = None,
+    ) -> None:
+        """Copy the parent session's cwd into the child's cwd at branch time.
+
+        The chat shell calls this once, right after
+        ``POST /api/sessions/{id}/branch`` creates the child row, so the
+        child inherits everything the agent had on disk up to the fork
+        point (Claude memory files, project assets, scratch notes) but
+        diverges from there. Subsequent writes by parent or child stay
+        confined to their own per-session cwd.
+
+        Two trees get copied:
+
+        * The cwd subtree itself (``${base}/sessions/<sid>/``) for any
+          project-local files the agent persisted.
+        * The Claude Code auto-memory dir at
+          ``~/.claude/projects/<encoded-cwd>/memory/``. Claude does not
+          store its memory inside the cwd; it keys per-project state by
+          a slug derived from the realpath of the cwd. Without this copy
+          the per-session cwd isolation accidentally erases the
+          parent's learned facts at fork time, which defeats the
+          purpose of branching.
+
+        We deliberately skip Claude's per-conversation ``*.jsonl``
+        transcripts: those are bound to a specific Claude session id and
+        copying them would resurrect a session the child should not
+        replay.
+
+        No-op when isolation is ``"shared"`` (there is only one cwd) or
+        when the parent has never been warmed (no source directory to
+        copy yet).
+        """
+
+        if self._config.agent_cwd_isolation != "per_session":
+            return
+        try:
+            parent_cwd = self.resolve_session_cwd(parent_session_id, backend=backend)
+            child_cwd = self.resolve_session_cwd(child_session_id, backend=backend)
+        except RuntimeError:
+            # No backend cwd configured -- nothing to copy.
+            return
+        parent_path = Path(parent_cwd)
+        child_path = Path(child_cwd)
+        if parent_path == child_path:
+            return
+        if not await asyncio.to_thread(parent_path.exists):
+            return
+        # ``copytree`` with ``dirs_exist_ok`` overlays the parent tree on
+        # top of the freshly-created (empty) child directory. We delegate
+        # to a thread to keep the event loop responsive on large cwds.
+        await asyncio.to_thread(
+            shutil.copytree,
+            str(parent_path),
+            str(child_path),
+            symlinks=False,
+            dirs_exist_ok=True,
+        )
+        await asyncio.to_thread(self._copy_claude_memory_dir, parent_path, child_path)
+
+    @staticmethod
+    def _claude_project_memory_dir(cwd: Path) -> Path:
+        """Return the ``~/.claude/projects/<slug>/memory`` path for ``cwd``.
+
+        Claude Code derives the project slug from ``realpath(cwd)`` by
+        replacing every ``/`` with ``-``. On macOS that means ``/tmp``
+        becomes ``-private-tmp-...`` because the realpath crosses the
+        ``/private`` boundary; we mirror that resolution so the slug
+        matches whatever Claude wrote.
+        """
+
+        real = cwd.resolve()
+        slug = str(real).replace("/", "-")
+        return Path.home() / ".claude" / "projects" / slug / "memory"
+
+    @classmethod
+    def _copy_claude_memory_dir(cls, parent_cwd: Path, child_cwd: Path) -> None:
+        """Best-effort copy of Claude's per-project memory dir."""
+
+        src = cls._claude_project_memory_dir(parent_cwd)
+        dst = cls._claude_project_memory_dir(child_cwd)
+        if not src.exists():
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(str(src), str(dst), symlinks=False, dirs_exist_ok=True)
 
     def adopt_memory(self, session_id: UUID, memory_block: str) -> None:
         """Stash a user-adopted memory block for the next ``run()``.
