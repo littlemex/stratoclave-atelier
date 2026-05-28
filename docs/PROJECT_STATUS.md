@@ -1,6 +1,6 @@
 # stratoclave-atelier: Implementation Status
 
-**Last updated**: 2026-05-27 (Stage K)
+**Last updated**: 2026-05-28 (Stage K follow-up: per-session cwd isolation)
 **Project started**: 2026-05-25
 
 ## Overall progress
@@ -20,6 +20,30 @@
 | I     | `DistillSnapshotResolver` (distill-backed snapshot answers) + CLI `session tail` (SSE -> JSON Lines) + `ATELIER_SNAPSHOT_RESOLVER` knob | Done |
 | J     | Branch from chat: `POST /api/sessions/{id}/branch` orchestrator + `AutoNamer` (Loom / Noop) + chat header "Fork now" + per-turn hover + breadcrumb + right-side SVG fork DAG + edge memos in localStorage | Done |
 | K     | Cross-session @ mention: distill `scope_session_ids` end-to-end + `POST /api/memory/{query,adopt}` + raw event search fallback + `AgentRunner._pending_memory` priority chain + chat `@ session` dialog with B/A tabs + memory chip | Done |
+
+### What ships in Stage K follow-up (per-session cwd isolation)
+
+Bug surfaced after Stage K landed: every atelier session shared a single
+`ATELIER_AGENT_CWD`, so Claude Code's auto-memory directory (keyed by
+`realpath(cwd)`) was global. Two concrete failure modes:
+
+1. **Sibling contamination**: a brand-new session inherited memory written
+   by an unrelated earlier session.
+2. **Reverse leak from child to parent**: a child branch overwriting the
+   memory dir polluted the parent's context.
+
+Fix splits cwd by atelier session id and re-seeds at branch time so that
+parent → child knowledge inheritance is preserved while siblings stay
+isolated and child writes never propagate back.
+
+| Component | File(s) | State |
+|-----------|---------|-------|
+| `agent_cwd_isolation: Literal["per_session", "shared"]` config + `ATELIER_AGENT_CWD_ISOLATION` env knob; default `per_session`, `shared` reverts to Stage G behaviour | `src/stratoclave_atelier/config.py` | Done |
+| `AgentRunner.resolve_session_cwd(session_id, *, backend=None)`: returns `${base}/sessions/${session_id}` (creates on demand); reused by `_ensure_session` so each loom session warms in its own dir | `src/stratoclave_atelier/agent_runner.py` | Done |
+| `AgentRunner.seed_branch_cwd(parent_session_id, child_session_id, *, backend=None)`: at branch time copies (a) the parent cwd subtree and (b) `~/.claude/projects/<encoded-cwd>/memory/` so Claude Code's auto-memory follows the fork. Skips per-conversation `*.jsonl` transcripts (session-bound) | `src/stratoclave_atelier/agent_runner.py` | Done |
+| `POST /api/sessions/{id}/branch` calls `seed_branch_cwd` after the fork row is created (best-effort; missing AgentRunner / unconfigured cwd no-op silently) | `src/stratoclave_atelier/api/sessions.py::branch_session` | Done |
+| Unit tests: per-session cwd shape, `shared` mode round-trip, branch copytree (cwd subtree), branch claude project memory copy with monkeypatched `Path.home`, missing-claude-dir noop, shared-mode noop, config rejects unknown isolation values | `tests/unit/test_agent_runner.py`, `tests/unit/test_config.py` | Done |
+| Verified end-to-end with Playwright: parent learns "blue" → fork → child answers "blue" (inheritance restored), independent sibling answers "I don't know" (isolation), child writes new memory → parent's memory dir md5 unchanged (no reverse leak) | live `http://127.0.0.1:8123/` against `claude_code` backend | Done |
 
 ### What ships in Stage K (this delta)
 

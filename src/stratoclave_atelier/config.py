@@ -31,6 +31,7 @@ from stratoclave_atelier.core.errors import ConfigError
 AtelierAuthMode = Literal["none", "bearer", "stratoclave_cognito"]
 AtelierAgentBackend = Literal["none", "claude_code", "kiro_code", "mock"]
 AtelierSnapshotResolver = Literal["echo", "distill"]
+AtelierAgentCwdIsolation = Literal["per_session", "shared"]
 
 _VALID_BACKENDS: tuple[str, ...] = ("claude_code", "kiro_code", "mock")
 
@@ -41,6 +42,7 @@ _DEFAULT_AUTH_MODE: AtelierAuthMode = "none"
 _DEFAULT_BLOB_DIR = ".atelier-blobs"
 _DEFAULT_AGENT_BACKEND: AtelierAgentBackend = "none"
 _DEFAULT_SNAPSHOT_RESOLVER: AtelierSnapshotResolver = "echo"
+_DEFAULT_AGENT_CWD_ISOLATION: AtelierAgentCwdIsolation = "per_session"
 
 
 def _read_int(env: Mapping[str, str], key: str, default: int) -> int:
@@ -161,6 +163,17 @@ class AtelierConfig:
     """Per-backend ``cwd`` overrides (keys: backend names)."""
     agent_allowed_tools_by_backend: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     """Per-backend ``allowed_tools`` overrides."""
+    agent_cwd_isolation: AtelierAgentCwdIsolation = _DEFAULT_AGENT_CWD_ISOLATION
+    """How agent cwds are scoped across atelier sessions.
+
+    ``per_session`` (default) gives each atelier session_id its own
+    ``${agent_cwd}/sessions/${session_id}`` directory so that any
+    state the backend persists alongside its cwd (Claude Code's
+    auto-memory, ``.claude/projects/`` transcripts, project-local
+    configuration, etc.) does not leak between siblings or between
+    parent/child branches. ``shared`` reverts to the Stage G behaviour
+    where every session points at the same configured cwd.
+    """
     distill_enabled: bool = False
     distill_database_url: str | None = None
     distill_auto_ingest: bool = True
@@ -345,6 +358,17 @@ class AtelierConfig:
                 "expected one of: echo, distill"
             )
 
+        agent_cwd_isolation = pop_str(
+            "agent_cwd_isolation",
+            "ATELIER_AGENT_CWD_ISOLATION",
+            _DEFAULT_AGENT_CWD_ISOLATION,
+        )
+        if agent_cwd_isolation not in ("per_session", "shared"):
+            raise ConfigError(
+                f"unsupported agent_cwd_isolation {agent_cwd_isolation!r}; "
+                "expected one of: per_session, shared"
+            )
+
         agent_backends_allowed = pop_csv("agent_backends_allowed", "ATELIER_AGENT_BACKENDS_ALLOWED")
         # Per-backend cwd / allowed_tools maps. We accept either kwarg
         # (``agent_cwd_by_backend={'kiro_code': '/wk'}``) or env vars
@@ -382,6 +406,7 @@ class AtelierConfig:
             ),
             agent_memory_enabled=pop_bool("agent_memory_enabled", "ATELIER_AGENT_MEMORY", True),
             snapshot_resolver=cast(AtelierSnapshotResolver, snapshot_resolver),
+            agent_cwd_isolation=cast(AtelierAgentCwdIsolation, agent_cwd_isolation),
         )
         if overrides:
             unknown = ", ".join(sorted(overrides))
