@@ -16,6 +16,7 @@
 // server round-trip.
 
 const EDGE_MEMO_KEY = "atelier:fork-edge-memos";
+const LAST_SESSION_KEY = "atelier:last-session-id";
 const DAG_PANE_WIDTH_KEY = "atelier:dag-pane-width";
 const DAG_PANE_WIDTH_MIN = 220;
 const DAG_PANE_WIDTH_DEFAULT = 320;
@@ -50,15 +51,21 @@ const state = {
     /** Map of "<parent>:<child>" -> memo string, mirrored to localStorage. */
     edgeMemos: loadEdgeMemos(),
     /**
-     * Stage K: latest preview text rendered into ``#mention-results``. The
-     * Adopt button reuses this string; ``null`` means "no preview yet, do
-     * not enable Adopt".
+     * Stage L: groups indexed by id (UUID -> {group_id, name, description, color}).
+     * Refreshed from ``/api/groups`` whenever the sidebar reloads.
      */
-    mentionPreview: null,
-    /** Stage K: ``"distill"`` or ``"raw"``, drives tab visibility. */
-    mentionTab: "distill",
-    /** Stage K: cached distill enablement (last ``/api/memory/query`` response). */
-    mentionDistillEnabled: null,
+    groups: new Map(),
+    /** Stage L: editing context for #group-edit dialog ("create" | UUID). */
+    editingGroupId: null,
+    /** Stage L: session id whose context menu is open ("" if hidden). */
+    contextMenuSessionId: null,
+    /**
+     * Stage L: active Curator scope for the open panel.
+     * ``null`` when the panel is closed.
+     */
+    curatorScope: null,
+    /** AbortController for the in-flight curator stream, ``null`` when idle. */
+    curatorStream: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -188,22 +195,34 @@ async function setActiveSession(session, { pushHistory = false } = {}) {
     setSessionLabel(session.session_id, session.agent_backend);
     document.getElementById("button-freeze").disabled = false;
     document.getElementById("button-branch").disabled = false;
-    const mentionBtn = document.getElementById("button-mention");
-    if (mentionBtn) {
-        mentionBtn.disabled = false;
-    }
     lockBackendPicker(true);
     refreshMemoryChip().catch(() => {});
 
-    if (pushHistory) {
-        const url = new URL(window.location.href);
+    // Reload survival: keep both the URL and localStorage in sync. The URL
+    // is the source of truth; localStorage is the fallback when the
+    // operator reloads from a stale URL like ``/`` without ``?session=``.
+    // We always replaceState (so the URL matches the active session even
+    // when ``pushHistory`` is false), and pushState only when the caller
+    // wants a new history entry (e.g. clicking a DAG node).
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("session") !== session.session_id) {
         url.searchParams.set("session", session.session_id);
-        window.history.pushState(
-            { sessionId: session.session_id },
-            "",
-            url.toString(),
-        );
+        const target = url.toString();
+        if (pushHistory) {
+            window.history.pushState(
+                { sessionId: session.session_id },
+                "",
+                target,
+            );
+        } else {
+            window.history.replaceState(
+                { sessionId: session.session_id },
+                "",
+                target,
+            );
+        }
     }
+    saveLastSessionId(session.session_id);
 
     chatLog().innerHTML = "";
     state.streamingAssistantEl = null;
@@ -309,16 +328,13 @@ async function startNewSession() {
     }
     document.getElementById("button-freeze").disabled = true;
     document.getElementById("button-branch").disabled = true;
-    const mentionBtn = document.getElementById("button-mention");
-    if (mentionBtn) {
-        mentionBtn.disabled = true;
-    }
     hideMemoryChip();
     setSessionLabel(null);
     lockBackendPicker(false);
     const url = new URL(window.location.href);
     url.searchParams.delete("session");
     window.history.pushState({ sessionId: null }, "", url.toString());
+    saveLastSessionId(null);
     clearBreadcrumb();
     flash("Started a new session");
 }
@@ -338,6 +354,18 @@ async function navigateToSession(sessionId) {
             session = await api("GET", `/api/sessions/${sessionId}`);
         } catch (err) {
             flash(`Could not open session ${shortId(sessionId)}`);
+            // The id we tried is stale (deleted / wrong server); make
+            // sure we don't keep recovering to it on the next reload.
+            saveLastSessionId(null);
+            const url = new URL(window.location.href);
+            if (url.searchParams.get("session") === sessionId) {
+                url.searchParams.delete("session");
+                window.history.replaceState(
+                    { sessionId: null },
+                    "",
+                    url.toString(),
+                );
+            }
             return;
         }
     }
@@ -717,45 +745,118 @@ async function collectAncestry(session) {
 async function refreshForkGraph() {
     const dagEmpty = document.getElementById("dag-empty");
     const svg = document.getElementById("dag-svg");
-    if (!state.sessionId) {
-        // Keep mergedGraph as-is so a "New session" doesn't wipe the
-        // children we already know about; just hide the SVG until the
-        // user picks a session again.
-        state.forkGraph = null;
-        dagEmpty.removeAttribute("hidden");
-        svg.setAttribute("hidden", "");
-        return;
-    }
-    const session = state.sessionsCache.get(state.sessionId);
-    const groupId = session ? session.group_id : null;
-    let snapshot;
-    if (!groupId) {
-        // No group: build a synthetic single-node graph from the
-        // ancestry. The session-by-session endpoint suffices.
-        snapshot = await buildSyntheticGraph(state.sessionId);
-    } else {
+
+    // Make sure ``state.groups`` is loaded before we render: on a hard
+    // reload the boot path fires ``refreshGroups()`` and ``navigateToSession()``
+    // concurrently, so without this guard the first ``renderDag`` paints
+    // before groups arrive and the rect outline silently falls back to the
+    // default border colour.
+    if (state.groups.size === 0) {
         try {
-            snapshot = await api("GET", `/api/groups/${groupId}/fork-graph`);
+            await refreshGroupsOnly();
         } catch (err) {
-            snapshot = await buildSyntheticGraph(state.sessionId);
+            // Best-effort: if /api/groups is unreachable, paint without colours.
         }
     }
-    state.forkGraph = snapshot;
-    mergeForkGraph(snapshot);
+
+    // Always re-seed mergedGraph from the workspace-wide session list so
+    // hard-reloads do not lose roots / children that were not part of the
+    // current session's ancestry. ``mergedGraph`` was an in-memory Map,
+    // so before this fix only the active session's chain survived a
+    // refresh and every other root vanished from the DAG.
+    await hydrateAllSessionsIntoMergedGraph();
+
+    if (state.sessionId) {
+        // Layer the active session's authoritative fork-graph (group or
+        // ancestry) on top: this is the freshest data per child / version,
+        // and ``mergeForkGraph`` overwrites entries by id so we never
+        // shadow newer titles / versions with the cached list payload.
+        const session = state.sessionsCache.get(state.sessionId);
+        const groupId = session ? session.group_id : null;
+        let snapshot;
+        if (!groupId) {
+            snapshot = await buildSyntheticGraph(state.sessionId);
+        } else {
+            try {
+                snapshot = await api("GET", `/api/groups/${groupId}/fork-graph`);
+            } catch (err) {
+                snapshot = await buildSyntheticGraph(state.sessionId);
+            }
+        }
+        state.forkGraph = snapshot;
+        mergeForkGraph(snapshot);
+    } else {
+        // No active session yet (e.g. hard reload without ?session=...):
+        // we still want to show the workspace overview, so don't clear
+        // ``forkGraph`` here.
+        state.forkGraph = null;
+    }
+
     const merged = mergedGraphAsPayload();
     if (!merged.nodes.length) {
         dagEmpty.removeAttribute("hidden");
         svg.setAttribute("hidden", "");
         return;
     }
-    if (merged.nodes.length <= 1 && merged.edges.length === 0) {
-        dagEmpty.removeAttribute("hidden");
-        svg.setAttribute("hidden", "");
-        return;
-    }
+    // Even a solo (single-node, no edges) session must render: the
+    // operator wants to see its group colour and right-click it to assign
+    // / reassign / open Curator. The previous "<=1 -> hide" rule made
+    // freshly-reloaded single-session workspaces appear empty.
     dagEmpty.setAttribute("hidden", "");
     svg.removeAttribute("hidden");
     renderDag(merged);
+}
+
+async function hydrateAllSessionsIntoMergedGraph() {
+    // Pulls the full session list once and seeds ``state.sessionsCache``
+    // + ``state.mergedGraph`` so the DAG covers every root + child even
+    // immediately after a hard reload (when both maps start empty).
+    let listing;
+    try {
+        listing = await api("GET", "/api/sessions");
+    } catch (err) {
+        return;
+    }
+    if (!Array.isArray(listing)) {
+        return;
+    }
+    for (const s of listing) {
+        state.sessionsCache.set(s.session_id, s);
+        const existing = state.mergedGraph.nodes.get(s.session_id);
+        // Don't clobber a node we already merged from a fork-graph
+        // payload, but make sure missing nodes appear with their
+        // group / parent metadata.
+        if (!existing) {
+            state.mergedGraph.nodes.set(s.session_id, {
+                session_id: s.session_id,
+                title: s.title,
+                status: s.status,
+                parent_session_id: s.parent_session_id,
+                parent_version_id: s.parent_version_id,
+                fork_seq: s.fork_seq,
+                versions: [],
+                group_id: s.group_id || null,
+            });
+        } else if (existing.group_id == null && s.group_id) {
+            // group can be (re)assigned after the first merge; keep it
+            // current so the colour follows the latest server state.
+            state.mergedGraph.nodes.set(s.session_id, {
+                ...existing,
+                group_id: s.group_id,
+            });
+        }
+        if (s.parent_session_id) {
+            const key = `${s.parent_session_id}:${s.session_id}`;
+            if (!state.mergedGraph.edges.has(key)) {
+                state.mergedGraph.edges.set(key, {
+                    parent_session_id: s.parent_session_id,
+                    child_session_id: s.session_id,
+                    via_version_id: s.parent_version_id,
+                    fork_seq: s.fork_seq,
+                });
+            }
+        }
+    }
 }
 
 function mergeForkGraph(graph) {
@@ -902,6 +1003,15 @@ function renderDag(graph) {
         if (n.session_id === state.sessionId) {
             g.classList.add("current");
         }
+        const isRoot = !n.parent_session_id;
+        const groupId = n.group_id || null;
+        if (groupId) {
+            g.classList.add("has-group");
+            g.dataset.groupId = groupId;
+        }
+        if (isRoot) {
+            g.dataset.root = "true";
+        }
 
         const rect = document.createElementNS(
             "http://www.w3.org/2000/svg",
@@ -913,6 +1023,17 @@ function renderDag(graph) {
         rect.setAttribute("height", String(nodeHeight));
         rect.setAttribute("rx", "5");
         rect.setAttribute("ry", "5");
+        if (groupId) {
+            const grp = state.groups.get(groupId);
+            if (grp && grp.color) {
+                // ``setAttribute("stroke", ...)`` is a presentation
+                // attribute and loses to the ``.dag-node rect { stroke: ... }``
+                // rule in chat.css. Inline styles win over rule-based
+                // selectors, so colour the outline via ``style.stroke``.
+                rect.style.stroke = grp.color;
+                rect.style.strokeWidth = "2.5px";
+            }
+        }
         g.appendChild(rect);
 
         const text = document.createElementNS(
@@ -930,7 +1051,11 @@ function renderDag(graph) {
             "http://www.w3.org/2000/svg",
             "title",
         );
-        fullTitleNode.textContent = `${fullTitle} (double-click to rename)`;
+        const groupHint = groupId
+            ? ` -- group: ${state.groups.get(groupId)?.name || groupId}`
+            : "";
+        fullTitleNode.textContent =
+            `${fullTitle}${groupHint} (double-click to rename, right-click for actions)`;
         g.appendChild(fullTitleNode);
 
         g.addEventListener("click", () => navigateToSession(n.session_id));
@@ -938,6 +1063,11 @@ function renderDag(graph) {
             ev.preventDefault();
             ev.stopPropagation();
             renamePromptForSession(n.session_id, fullTitle);
+        });
+        g.addEventListener("contextmenu", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            openNodeContextMenu(n, ev.clientX, ev.clientY);
         });
         svg.appendChild(g);
     }
@@ -1040,6 +1170,27 @@ function persistEdgeMemos() {
         );
     } catch (err) {
         // Quota / private mode -- non-critical.
+    }
+}
+
+function saveLastSessionId(sessionId) {
+    try {
+        if (sessionId) {
+            window.localStorage.setItem(LAST_SESSION_KEY, sessionId);
+        } else {
+            window.localStorage.removeItem(LAST_SESSION_KEY);
+        }
+    } catch (err) {
+        // Quota / private mode -- non-critical; URL is the primary cursor.
+    }
+}
+
+function loadLastSessionId() {
+    try {
+        const raw = window.localStorage.getItem(LAST_SESSION_KEY);
+        return raw && typeof raw === "string" ? raw : null;
+    } catch (err) {
+        return null;
     }
 }
 
@@ -1175,114 +1326,95 @@ function applyDagPaneWidth(px) {
 }
 
 // ---------------------------------------------------------------------------
-// Stage K: cross-session @ mention panel + adopted memory chip
+// Stage L: groups sidebar + node context menu + group edit dialog
 // ---------------------------------------------------------------------------
 
-function setMentionTab(tab) {
-    state.mentionTab = tab;
-    const distillTab = document.getElementById("mention-tab-distill");
-    const rawTab = document.getElementById("mention-tab-raw");
-    const distillPane = document.getElementById("mention-pane-distill");
-    const rawPane = document.getElementById("mention-pane-raw");
-    if (!distillTab || !rawTab || !distillPane || !rawPane) {
-        return;
-    }
-    if (tab === "distill") {
-        distillTab.classList.add("is-active");
-        distillTab.setAttribute("aria-selected", "true");
-        rawTab.classList.remove("is-active");
-        rawTab.setAttribute("aria-selected", "false");
-        distillPane.removeAttribute("hidden");
-        rawPane.setAttribute("hidden", "");
-    } else {
-        rawTab.classList.add("is-active");
-        rawTab.setAttribute("aria-selected", "true");
-        distillTab.classList.remove("is-active");
-        distillTab.setAttribute("aria-selected", "false");
-        rawPane.removeAttribute("hidden");
-        distillPane.setAttribute("hidden", "");
-    }
-}
+const DEFAULT_GROUP_COLOR = "#3B82F6";
 
-function clearMentionPreview(message = "") {
-    const results = document.getElementById("mention-results");
-    if (results) {
-        results.textContent = message;
-    }
-    state.mentionPreview = null;
-    const adoptBtn = document.getElementById("mention-adopt");
-    if (adoptBtn) {
-        adoptBtn.disabled = true;
-    }
-}
-
-function setMentionPreview(text) {
-    const results = document.getElementById("mention-results");
-    state.mentionPreview = text || null;
-    if (results) {
-        results.textContent = text || "(no results)";
-    }
-    const adoptBtn = document.getElementById("mention-adopt");
-    if (adoptBtn) {
-        adoptBtn.disabled = !state.mentionPreview;
-    }
-}
-
-async function populateMentionSessionSelectors() {
-    const distillSelect = document.getElementById("mention-distill-sessions");
-    const rawSelect = document.getElementById("mention-raw-session");
-    if (!distillSelect || !rawSelect) {
-        return;
-    }
-    let sessions;
+async function refreshGroupsOnly() {
+    // Loads ``/api/groups`` into ``state.groups`` *without* re-rendering
+    // the DAG. ``refreshForkGraph`` calls this when groups are missing on
+    // first paint (hard-reload race) so the subsequent ``renderDag`` has
+    // the colour map it needs.
+    let groups;
     try {
-        sessions = await api("GET", "/api/sessions");
+        groups = await api("GET", "/api/groups");
     } catch (err) {
-        sessions = [];
+        groups = [];
     }
-    for (const s of sessions) {
-        if (!state.sessionsCache.has(s.session_id)) {
-            state.sessionsCache.set(s.session_id, s);
-        }
+    state.groups.clear();
+    for (const g of groups) {
+        state.groups.set(g.group_id, g);
     }
-    const others = sessions.filter((s) => s.session_id !== state.sessionId);
-    distillSelect.innerHTML = "";
-    rawSelect.innerHTML = "";
-    if (others.length === 0) {
-        const empty = document.createElement("option");
-        empty.value = "";
-        empty.disabled = true;
-        empty.textContent = "(no other sessions)";
-        distillSelect.appendChild(empty.cloneNode(true));
-        rawSelect.appendChild(empty);
-        return;
-    }
-    for (const s of others) {
-        const label = `${s.title || shortId(s.session_id)} · ${shortId(s.session_id)}`;
-        const o1 = document.createElement("option");
-        o1.value = s.session_id;
-        o1.textContent = label;
-        distillSelect.appendChild(o1);
-        const o2 = document.createElement("option");
-        o2.value = s.session_id;
-        o2.textContent = label;
-        rawSelect.appendChild(o2);
+    renderGroupList();
+}
+
+async function refreshGroups() {
+    await refreshGroupsOnly();
+    if (state.forkGraph || state.mergedGraph.nodes.size > 0) {
+        renderDag(mergedGraphAsPayload());
     }
 }
 
-async function openMentionPanel() {
-    if (!state.sessionId) {
-        return;
+function renderGroupList() {
+    const list = document.getElementById("group-list");
+    if (!list) return;
+    list.innerHTML = "";
+    for (const g of state.groups.values()) {
+        const li = document.createElement("li");
+        li.className = "group-list-item";
+        li.dataset.groupId = g.group_id;
+        li.dataset.testid = "group-list-item";
+
+        const swatch = document.createElement("span");
+        swatch.className = "group-swatch";
+        swatch.style.background = g.color;
+        li.appendChild(swatch);
+
+        const name = document.createElement("span");
+        name.className = "group-name";
+        name.textContent = g.name;
+        name.title = g.description || g.name;
+        li.appendChild(name);
+
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "group-edit-button";
+        editBtn.textContent = "Edit";
+        editBtn.dataset.testid = "group-edit-open";
+        editBtn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            openGroupDialog(g.group_id);
+        });
+        li.appendChild(editBtn);
+
+        list.appendChild(li);
     }
-    const dlg = document.getElementById("mention-panel");
-    if (!dlg) {
-        return;
+}
+
+function openGroupDialog(groupId) {
+    const dlg = document.getElementById("group-edit");
+    if (!dlg) return;
+    state.editingGroupId = groupId || "create";
+    const titleEl = document.getElementById("group-edit-title");
+    const nameEl = document.getElementById("group-edit-name");
+    const descEl = document.getElementById("group-edit-description");
+    const colorEl = document.getElementById("group-edit-color");
+    const deleteBtn = document.getElementById("group-edit-delete");
+    if (groupId && state.groups.has(groupId)) {
+        const g = state.groups.get(groupId);
+        titleEl.textContent = `Edit group: ${g.name}`;
+        nameEl.value = g.name;
+        descEl.value = g.description || "";
+        colorEl.value = g.color || DEFAULT_GROUP_COLOR;
+        deleteBtn.removeAttribute("hidden");
+    } else {
+        titleEl.textContent = "New group";
+        nameEl.value = "";
+        descEl.value = "";
+        colorEl.value = DEFAULT_GROUP_COLOR;
+        deleteBtn.setAttribute("hidden", "");
     }
-    setMentionTab("distill");
-    clearMentionPreview("");
-    document.getElementById("mention-distill-query").value = "";
-    document.getElementById("mention-raw-query").value = "";
-    await populateMentionSessionSelectors();
     if (typeof dlg.showModal === "function") {
         dlg.showModal();
     } else {
@@ -1290,109 +1422,382 @@ async function openMentionPanel() {
     }
 }
 
-function closeMentionPanel() {
-    closeDialog(document.getElementById("mention-panel"));
-}
-
-async function runDistillSearch() {
-    const queryEl = document.getElementById("mention-distill-query");
-    const select = document.getElementById("mention-distill-sessions");
-    const disabledHint = document.getElementById("mention-distill-disabled");
-    const query = (queryEl?.value || "").trim();
-    if (!query) {
-        clearMentionPreview("Enter a query to search.");
+async function saveGroupFromDialog() {
+    const nameEl = document.getElementById("group-edit-name");
+    const descEl = document.getElementById("group-edit-description");
+    const colorEl = document.getElementById("group-edit-color");
+    const name = (nameEl?.value || "").trim();
+    if (!name) {
+        flash("Group name is required");
         return;
     }
-    const sessionIds = select
-        ? Array.from(select.selectedOptions).map((o) => o.value).filter(Boolean)
-        : [];
-    const body = { query };
-    if (sessionIds.length > 0) {
-        body.session_ids = sessionIds;
-    }
-    clearMentionPreview("Searching...");
+    const description = (descEl?.value || "").trim() || null;
+    const color = colorEl?.value || DEFAULT_GROUP_COLOR;
     try {
-        const resp = await api("POST", "/api/memory/query", body);
-        state.mentionDistillEnabled = resp.enabled === true;
-        if (!resp.enabled) {
-            if (disabledHint) {
-                disabledHint.removeAttribute("hidden");
+        if (state.editingGroupId === "create") {
+            await api("POST", "/api/groups", { name, description, color });
+            flash("Group created");
+        } else if (state.editingGroupId) {
+            await api("PATCH", `/api/groups/${state.editingGroupId}`, {
+                name,
+                description,
+                color,
+            });
+            flash("Group updated");
+        }
+        closeDialog(document.getElementById("group-edit"));
+        await refreshGroups();
+    } catch (err) {
+        flash(`Group save failed: ${err.message || err}`);
+    }
+}
+
+async function deleteGroupFromDialog() {
+    if (!state.editingGroupId || state.editingGroupId === "create") {
+        return;
+    }
+    const g = state.groups.get(state.editingGroupId);
+    const label = g ? g.name : state.editingGroupId;
+    const ok = window.confirm(
+        `Delete group "${label}"? Sessions will be detached but kept.`,
+    );
+    if (!ok) return;
+    try {
+        await api("DELETE", `/api/groups/${state.editingGroupId}`);
+        flash("Group deleted");
+        closeDialog(document.getElementById("group-edit"));
+        await refreshGroups();
+    } catch (err) {
+        flash(`Delete failed: ${err.message || err}`);
+    }
+}
+
+function openNodeContextMenu(node, clientX, clientY) {
+    const menu = document.getElementById("node-context-menu");
+    if (!menu) return;
+    menu.innerHTML = "";
+    state.contextMenuSessionId = node.session_id;
+    const isRoot = !node.parent_session_id;
+
+    const renameItem = document.createElement("li");
+    renameItem.textContent = "Rename...";
+    renameItem.dataset.action = "rename";
+    renameItem.addEventListener("click", () => {
+        closeNodeContextMenu();
+        renamePromptForSession(node.session_id, node.title || "");
+    });
+    menu.appendChild(renameItem);
+
+    const curatorDivider = document.createElement("li");
+    curatorDivider.className = "is-divider";
+    curatorDivider.textContent = "Curator";
+    menu.appendChild(curatorDivider);
+
+    const askSession = document.createElement("li");
+    askSession.dataset.testid = "node-context-curator-session";
+    askSession.textContent = "Ask Curator about this session";
+    askSession.addEventListener("click", () => {
+        closeNodeContextMenu();
+        openCuratorPanel({
+            scopeKind: "session",
+            scopeId: node.session_id,
+            summary: `session ${node.title || node.session_id}`,
+        });
+    });
+    menu.appendChild(askSession);
+
+    if (node.group_id) {
+        const groupName = state.groups.get(node.group_id)?.name || "group";
+        const askGroup = document.createElement("li");
+        askGroup.dataset.testid = "node-context-curator-group";
+        askGroup.textContent = `Ask Curator about group "${groupName}"`;
+        askGroup.addEventListener("click", () => {
+            closeNodeContextMenu();
+            openCuratorPanel({
+                scopeKind: "group",
+                scopeId: node.group_id,
+                summary: `group "${groupName}"`,
+            });
+        });
+        menu.appendChild(askGroup);
+    }
+
+    if (isRoot) {
+        const divider = document.createElement("li");
+        divider.className = "is-divider";
+        divider.textContent = "Group";
+        menu.appendChild(divider);
+
+        if (state.groups.size === 0) {
+            const empty = document.createElement("li");
+            empty.className = "is-disabled";
+            empty.textContent = "(no groups -- create one first)";
+            menu.appendChild(empty);
+        } else {
+            for (const g of state.groups.values()) {
+                const item = document.createElement("li");
+                item.dataset.testid = "node-context-group-option";
+                const swatch = document.createElement("span");
+                swatch.className = "group-swatch";
+                swatch.style.background = g.color;
+                item.appendChild(swatch);
+                const label = document.createElement("span");
+                const isCurrent = node.group_id === g.group_id;
+                label.textContent = `${isCurrent ? "[current] " : ""}${g.name}`;
+                item.appendChild(label);
+                item.addEventListener("click", () => {
+                    closeNodeContextMenu();
+                    assignSessionToGroup(node.session_id, g.group_id).catch(() => {});
+                });
+                menu.appendChild(item);
             }
-            clearMentionPreview(
-                "Memory disabled on this server -- switch to Raw events.",
-            );
-            return;
         }
-        if (disabledHint) {
-            disabledHint.setAttribute("hidden", "");
+
+        if (node.group_id) {
+            const detach = document.createElement("li");
+            detach.dataset.testid = "node-context-detach";
+            detach.textContent = "Remove from group";
+            detach.addEventListener("click", () => {
+                closeNodeContextMenu();
+                assignSessionToGroup(node.session_id, null).catch(() => {});
+            });
+            menu.appendChild(detach);
         }
-        if (!resp.memory_block) {
-            clearMentionPreview("No matches.");
-            return;
-        }
-        setMentionPreview(resp.memory_block);
+    } else {
+        const divider = document.createElement("li");
+        divider.className = "is-divider";
+        divider.textContent = "Group";
+        menu.appendChild(divider);
+        const note = document.createElement("li");
+        note.className = "is-disabled";
+        note.textContent = "(forks inherit the root's group)";
+        menu.appendChild(note);
+    }
+
+    menu.style.left = `${clientX}px`;
+    menu.style.top = `${clientY}px`;
+    menu.removeAttribute("hidden");
+}
+
+function closeNodeContextMenu() {
+    const menu = document.getElementById("node-context-menu");
+    if (menu) {
+        menu.setAttribute("hidden", "");
+    }
+    state.contextMenuSessionId = null;
+}
+
+async function assignSessionToGroup(sessionId, groupId) {
+    try {
+        await api("PUT", `/api/sessions/${sessionId}/group`, {
+            group_id: groupId,
+        });
+        flash(groupId ? "Added to group" : "Removed from group");
+        await refreshForkGraph();
     } catch (err) {
-        clearMentionPreview(`Search failed: ${err.message || err}`);
+        flash(`Assign failed: ${err.message || err}`);
     }
 }
 
-async function runRawSearch() {
-    const queryEl = document.getElementById("mention-raw-query");
-    const select = document.getElementById("mention-raw-session");
-    const query = (queryEl?.value || "").trim();
-    const targetId = select?.value || "";
-    if (!query) {
-        clearMentionPreview("Enter a query to search.");
+// ---------------------------------------------------------------------------
+// Stage L: Curator panel (isolated scope-bound Q&A)
+// ---------------------------------------------------------------------------
+
+function curatorDialog() {
+    return document.getElementById("curator-panel");
+}
+
+function openCuratorPanel({ scopeKind, scopeId, summary }) {
+    const dialog = curatorDialog();
+    if (!dialog) return;
+    state.curatorScope = { scopeKind, scopeId, summary };
+    const summaryEl = document.getElementById("curator-scope-summary");
+    if (summaryEl) {
+        summaryEl.textContent = `${scopeKind} -- ${summary}`;
+    }
+    const answerSection = document.querySelector(
+        "[data-testid='curator-answer-section']"
+    );
+    if (answerSection) {
+        answerSection.setAttribute("hidden", "");
+    }
+    const answerEl = document.getElementById("curator-answer");
+    if (answerEl) {
+        answerEl.textContent = "";
+        answerEl.classList.remove("streaming");
+    }
+    const statusEl = document.getElementById("curator-answer-status");
+    if (statusEl) {
+        statusEl.textContent = "";
+    }
+    const askBtn = document.getElementById("curator-ask");
+    if (askBtn) {
+        askBtn.disabled = false;
+        askBtn.textContent = "Ask";
+    }
+    if (typeof dialog.showModal === "function" && !dialog.open) {
+        dialog.showModal();
+    } else {
+        dialog.setAttribute("open", "");
+    }
+    document.getElementById("curator-question")?.focus();
+}
+
+function closeCuratorPanel() {
+    if (state.curatorStream) {
+        state.curatorStream.abort();
+        state.curatorStream = null;
+    }
+    state.curatorScope = null;
+    closeDialog(curatorDialog());
+}
+
+async function runCuratorQuery() {
+    const scope = state.curatorScope;
+    if (!scope) return;
+    const questionEl = document.getElementById("curator-question");
+    const question = (questionEl?.value || "").trim();
+    if (!question) {
+        flash("Question cannot be empty");
+        questionEl?.focus();
         return;
     }
-    if (!targetId) {
-        clearMentionPreview("Select a target session.");
-        return;
+    const modeEl = document.querySelector(
+        "input[name='curator-mode']:checked"
+    );
+    const contextMode = modeEl?.value === "distill" ? "distill" : "raw";
+
+    const askBtn = document.getElementById("curator-ask");
+    if (askBtn) {
+        askBtn.disabled = true;
+        askBtn.textContent = "Asking...";
     }
-    clearMentionPreview("Searching...");
+    const answerSection = document.querySelector(
+        "[data-testid='curator-answer-section']"
+    );
+    answerSection?.removeAttribute("hidden");
+    const answerEl = document.getElementById("curator-answer");
+    if (answerEl) {
+        answerEl.textContent = "";
+        answerEl.classList.add("streaming");
+    }
+    const statusEl = document.getElementById("curator-answer-status");
+    if (statusEl) {
+        statusEl.textContent = "Streaming...";
+    }
+
+    const controller = new AbortController();
+    state.curatorStream = controller;
     try {
-        const url = `/api/sessions/${targetId}/events/search?q=${encodeURIComponent(
-            query,
-        )}&kind=turn&limit=10`;
-        const resp = await api("GET", url);
-        const matches = resp.matches || [];
-        if (matches.length === 0) {
-            clearMentionPreview("No matches.");
+        const resp = await fetch("/api/curator/query", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                scope_kind: scope.scopeKind,
+                scope_id: scope.scopeId,
+                context_mode: contextMode,
+                question,
+            }),
+            signal: controller.signal,
+        });
+        if (!resp.ok) {
+            const text = await resp.text();
+            throw new Error(`${resp.status} ${text}`);
+        }
+        await consumeCuratorSse(resp, answerEl, statusEl);
+    } catch (err) {
+        if (controller.signal.aborted) {
+            // closing the panel cancelled the stream; keep UI quiet.
             return;
         }
-        const target = state.sessionsCache.get(targetId);
-        const header = `[raw events] ${target?.title || shortId(targetId)} · query: "${query}"`;
-        const blocks = matches.map((m) => {
-            const role = m.payload?.role || m.kind || "?";
-            const content =
-                typeof m.payload?.content === "string"
-                    ? m.payload.content
-                    : JSON.stringify(m.payload, null, 2);
-            return `--- seq ${m.seq} (${role}) ---\n${content}`;
-        });
-        const text = `${header}\n\n${blocks.join("\n\n")}`;
-        setMentionPreview(text);
-    } catch (err) {
-        clearMentionPreview(`Search failed: ${err.message || err}`);
+        if (statusEl) {
+            statusEl.textContent = `Failed: ${err.message || err}`;
+        }
+        if (answerEl) {
+            answerEl.classList.remove("streaming");
+        }
+        flash(`Curator failed: ${err.message || err}`);
+    } finally {
+        if (state.curatorStream === controller) {
+            state.curatorStream = null;
+        }
+        if (askBtn) {
+            askBtn.disabled = false;
+            askBtn.textContent = "Ask again";
+        }
     }
 }
 
-async function adoptMentionPreview() {
-    if (!state.sessionId || !state.mentionPreview) {
-        return;
+async function consumeCuratorSse(resp, answerEl, statusEl) {
+    if (!resp.body) {
+        throw new Error("response has no body");
     }
-    try {
-        await api("POST", "/api/memory/adopt", {
-            session_id: state.sessionId,
-            memory_block: state.mentionPreview,
-        });
-        renderMemoryChip(state.mentionPreview);
-        flash("Memory adopted for next turn");
-        closeMentionPanel();
-    } catch (err) {
-        flash(`Adopt failed: ${err.message || err}`);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let endTurnSeen = false;
+    while (true) {
+        const { value, done } = await reader.read();
+        if (value) {
+            buffer += decoder.decode(value, { stream: true });
+            let idx = buffer.indexOf("\n\n");
+            while (idx !== -1) {
+                const frame = buffer.slice(0, idx);
+                buffer = buffer.slice(idx + 2);
+                const handled = handleCuratorFrame(frame, answerEl, statusEl);
+                if (handled === "end_turn") {
+                    endTurnSeen = true;
+                }
+                idx = buffer.indexOf("\n\n");
+            }
+        }
+        if (done) break;
+    }
+    if (answerEl) {
+        answerEl.classList.remove("streaming");
+    }
+    if (statusEl) {
+        statusEl.textContent = endTurnSeen ? "Done" : "Disconnected";
     }
 }
+
+function handleCuratorFrame(frame, answerEl, statusEl) {
+    let eventType = "message";
+    let dataLines = [];
+    for (const line of frame.split("\n")) {
+        if (line.startsWith("event:")) {
+            eventType = line.slice(6).trim();
+        } else if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).trim());
+        }
+    }
+    const raw = dataLines.join("\n");
+    let payload = {};
+    if (raw) {
+        try {
+            payload = JSON.parse(raw);
+        } catch (err) {
+            payload = { text: raw };
+        }
+    }
+    if (eventType === "text_delta") {
+        const text = typeof payload.text === "string" ? payload.text : "";
+        if (text && answerEl) {
+            answerEl.textContent += text;
+        }
+    } else if (eventType === "error") {
+        if (statusEl) {
+            statusEl.textContent = `Error: ${payload.error || "unknown"}`;
+        }
+    } else if (eventType === "end_turn") {
+        return "end_turn";
+    }
+    return eventType;
+}
+
+// ---------------------------------------------------------------------------
+// Memory chip (queued context for the next turn)
+// ---------------------------------------------------------------------------
 
 function renderMemoryChip(block) {
     const chip = document.getElementById("memory-chip");
@@ -1471,42 +1876,62 @@ function boot() {
         .addEventListener("click", cancelEdgeMemo);
     document
         .getElementById("button-dag-refresh")
-        .addEventListener("click", refreshForkGraph);
-    const mentionBtn = document.getElementById("button-mention");
-    if (mentionBtn) {
-        mentionBtn.addEventListener("click", () => {
-            openMentionPanel().catch(() => {});
+        .addEventListener("click", () => {
+            refreshGroups().catch(() => {});
+            refreshForkGraph().catch(() => {});
         });
-    }
     document
-        .getElementById("mention-tab-distill")
-        ?.addEventListener("click", () => setMentionTab("distill"));
+        .getElementById("button-group-new")
+        ?.addEventListener("click", () => openGroupDialog(null));
     document
-        .getElementById("mention-tab-raw")
-        ?.addEventListener("click", () => setMentionTab("raw"));
-    document
-        .getElementById("mention-distill-run")
+        .getElementById("group-edit-save")
         ?.addEventListener("click", () => {
-            runDistillSearch().catch(() => {});
+            saveGroupFromDialog().catch(() => {});
         });
     document
-        .getElementById("mention-raw-run")
+        .getElementById("group-edit-cancel")
         ?.addEventListener("click", () => {
-            runRawSearch().catch(() => {});
+            closeDialog(document.getElementById("group-edit"));
         });
     document
-        .getElementById("mention-adopt")
+        .getElementById("group-edit-delete")
         ?.addEventListener("click", () => {
-            adoptMentionPreview().catch(() => {});
+            deleteGroupFromDialog().catch(() => {});
         });
-    document
-        .getElementById("mention-cancel")
-        ?.addEventListener("click", closeMentionPanel);
+    document.addEventListener("click", (ev) => {
+        const menu = document.getElementById("node-context-menu");
+        if (!menu || menu.hasAttribute("hidden")) return;
+        if (!menu.contains(ev.target)) {
+            closeNodeContextMenu();
+        }
+    });
+    document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") {
+            closeNodeContextMenu();
+        }
+    });
     document
         .getElementById("memory-chip-clear")
         ?.addEventListener("click", () => {
             clearMemoryChip().catch(() => {});
         });
+    document
+        .getElementById("curator-ask")
+        ?.addEventListener("click", () => {
+            runCuratorQuery().catch(() => {});
+        });
+    document
+        .getElementById("curator-close")
+        ?.addEventListener("click", () => {
+            closeCuratorPanel();
+        });
+    curatorDialog()?.addEventListener("close", () => {
+        if (state.curatorStream) {
+            state.curatorStream.abort();
+            state.curatorStream = null;
+        }
+        state.curatorScope = null;
+    });
     const fitBtn = document.getElementById("button-dag-fit");
     if (fitBtn) {
         fitBtn.addEventListener("click", () => {
@@ -1539,15 +1964,37 @@ function boot() {
 
     loadBackends();
 
-    // Stage J: deep-link via ?session=<id>. Picking up a pre-existing
+    // Stage J/L: deep-link via ?session=<id>. Picking up a pre-existing
     // session preserves the chat after a hard refresh.
+    //
+    // Order matters: we must finish ``refreshGroups`` before
+    // ``navigateToSession`` ends up in ``renderDag``, otherwise the first
+    // paint runs without ``state.groups`` populated and the rect outline
+    // falls back to the default border colour. ``refreshForkGraph`` has
+    // its own defensive fallback (it awaits ``refreshGroupsOnly`` if the
+    // map is empty), but boot-time sequencing keeps that fallback rare.
+    // Reload survival: URL ``?session=`` is the primary cursor; if it's
+    // missing (e.g. the operator opened a bare ``/``), fall back to the
+    // last session id we stashed in localStorage. Either way the user
+    // lands on the same session their last tab was on.
     const params = new URLSearchParams(window.location.search);
-    const sessionId = params.get("session");
-    if (sessionId) {
-        navigateToSession(sessionId).catch(() => {
-            // If the link is bogus we fall through to "new session" UX.
-        });
-    }
+    const urlSessionId = params.get("session");
+    const stickySessionId = urlSessionId || loadLastSessionId();
+    (async () => {
+        try {
+            await refreshGroups();
+        } catch (err) {
+            // best-effort: empty groups still lets the chat render
+        }
+        if (stickySessionId) {
+            try {
+                await navigateToSession(stickySessionId);
+            } catch (err) {
+                // Stale localStorage / bogus URL: drop to "new session" UX.
+                saveLastSessionId(null);
+            }
+        }
+    })();
 }
 
 boot();
@@ -1560,16 +2007,21 @@ if (typeof window !== "undefined") {
         loadEdgeMemos,
         hydrateSessionTurns,
         attachEventStream,
-        openMentionPanel,
-        closeMentionPanel,
-        setMentionTab,
-        runDistillSearch,
-        runRawSearch,
-        adoptMentionPreview,
         renderMemoryChip,
         hideMemoryChip,
         refreshMemoryChip,
         clearMemoryChip,
-        populateMentionSessionSelectors,
+        refreshGroups,
+        renderGroupList,
+        openGroupDialog,
+        saveGroupFromDialog,
+        deleteGroupFromDialog,
+        openNodeContextMenu,
+        closeNodeContextMenu,
+        assignSessionToGroup,
+        openCuratorPanel,
+        closeCuratorPanel,
+        runCuratorQuery,
+        handleCuratorFrame,
     };
 }

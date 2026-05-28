@@ -19,6 +19,7 @@ def test_group_is_frozen() -> None:
         group_id=uuid4(),
         name="a",
         description=None,
+        color="#3B82F6",
         created_at=_now(),
         updated_at=_now(),
     )

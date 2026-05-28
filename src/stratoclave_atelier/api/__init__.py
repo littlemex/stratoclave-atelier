@@ -9,6 +9,7 @@ retrieval ("ask another session").
 
 from stratoclave_atelier.api.agent import router as agent_router
 from stratoclave_atelier.api.agent_runs import router as agent_runs_router
+from stratoclave_atelier.api.curator import router as curator_router
 from stratoclave_atelier.api.events import router as events_router
 from stratoclave_atelier.api.fork_graph import router as fork_graph_router
 from stratoclave_atelier.api.groups import router as groups_router
@@ -21,6 +22,7 @@ from stratoclave_atelier.api.snapshot_queries import router as snapshot_queries_
 __all__ = [
     "agent_router",
     "agent_runs_router",
+    "curator_router",
     "events_router",
     "fork_graph_router",
     "groups_router",

@@ -39,6 +39,7 @@ from stratoclave_atelier.api.schemas import (
     SessionCreate,
     SessionFork,
     SessionFreeze,
+    SessionGroupAssign,
     SessionRead,
     SessionUpdate,
     TurnAppend,
@@ -137,6 +138,29 @@ async def update_session(
 
     try:
         session = await store.update_session_title(session_id, payload.title)
+    except NotFoundError as exc:
+        raise http_not_found(exc) from exc
+    except ConflictError as exc:
+        raise http_conflict(exc) from exc
+    return SessionRead.from_domain(session)
+
+
+@router.put("/{session_id}/group", response_model=SessionRead)
+async def assign_session_group(
+    session_id: UUID,
+    payload: SessionGroupAssign,
+    store: StoreDep,
+) -> SessionRead:
+    """Move a root session into a group, or detach it.
+
+    Stage L surfaces grouping in the Fork DAG sidebar. ``group_id``
+    is the target group (or ``None`` to detach). Only root sessions
+    (``parent_session_id IS NULL``) are assignable -- forks inherit
+    grouping transitively via their parent.
+    """
+
+    try:
+        session = await store.update_session_group(session_id, payload.group_id)
     except NotFoundError as exc:
         raise http_not_found(exc) from exc
     except ConflictError as exc:

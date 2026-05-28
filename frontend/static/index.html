@@ -42,15 +42,6 @@
             >
                 Fork now
             </button>
-            <button
-                type="button"
-                id="button-mention"
-                data-testid="chat-mention"
-                title="Ask another session"
-                disabled
-            >
-                @ session
-            </button>
             <a href="/panels" data-testid="chat-open-panels">Open panels</a>
         </nav>
     </header>
@@ -109,6 +100,29 @@
                     </button>
                 </div>
             </header>
+            <section
+                id="group-panel"
+                class="group-panel"
+                data-testid="group-panel"
+                aria-label="Groups"
+            >
+                <div class="group-panel-header">
+                    <h3>Groups</h3>
+                    <button
+                        type="button"
+                        id="button-group-new"
+                        data-testid="group-new"
+                        title="Create a new group"
+                    >
+                        +
+                    </button>
+                </div>
+                <ul
+                    id="group-list"
+                    class="group-list"
+                    data-testid="group-list"
+                ></ul>
+            </section>
             <div
                 id="dag-empty"
                 class="dag-empty"
@@ -198,131 +212,160 @@
         </form>
     </dialog>
 
-    <dialog id="mention-panel" class="mention-panel" data-testid="mention-panel">
-        <form method="dialog" class="mention-form">
-            <h2>Ask another session</h2>
-            <div class="mention-tabs" role="tablist">
+    <dialog id="group-edit" class="group-edit" data-testid="group-edit">
+        <form method="dialog" class="group-edit-form">
+            <h2 id="group-edit-title">New group</h2>
+            <label>
+                <span>Name</span>
+                <input
+                    type="text"
+                    id="group-edit-name"
+                    data-testid="group-edit-name"
+                    maxlength="200"
+                    placeholder="e.g. ops"
+                    required
+                />
+            </label>
+            <label>
+                <span>Description (optional)</span>
+                <input
+                    type="text"
+                    id="group-edit-description"
+                    data-testid="group-edit-description"
+                    maxlength="500"
+                />
+            </label>
+            <label>
+                <span>Color</span>
+                <input
+                    type="color"
+                    id="group-edit-color"
+                    data-testid="group-edit-color"
+                    value="#3B82F6"
+                />
+            </label>
+            <menu>
                 <button
                     type="button"
-                    id="mention-tab-distill"
-                    data-testid="mention-tab-distill"
-                    class="mention-tab is-active"
-                    role="tab"
-                    aria-selected="true"
-                >
-                    Distilled (B)
-                </button>
-                <button
-                    type="button"
-                    id="mention-tab-raw"
-                    data-testid="mention-tab-raw"
-                    class="mention-tab"
-                    role="tab"
-                    aria-selected="false"
-                >
-                    Raw events (A)
-                </button>
-            </div>
-
-            <div
-                id="mention-pane-distill"
-                class="mention-pane"
-                role="tabpanel"
-                data-testid="mention-pane-distill"
-            >
-                <p
-                    id="mention-distill-disabled"
-                    class="mention-disabled"
-                    data-testid="mention-distill-disabled"
+                    value="delete"
+                    id="group-edit-delete"
+                    data-testid="group-edit-delete"
                     hidden
                 >
-                    Distilled memory is not enabled on this server. Switch
-                    to <em>Raw events</em> to fall back to per-session search.
-                </p>
-                <label>
-                    <span>Sessions to scope (multi-select; leave empty for "all")</span>
-                    <select
-                        id="mention-distill-sessions"
-                        data-testid="mention-distill-sessions"
-                        multiple
-                        size="6"
-                    ></select>
-                </label>
-                <label>
-                    <span>Query</span>
-                    <input
-                        type="text"
-                        id="mention-distill-query"
-                        data-testid="mention-distill-query"
-                        maxlength="4000"
-                        placeholder="e.g. how did we tune Postgres?"
-                    />
-                </label>
+                    Delete
+                </button>
                 <button
                     type="button"
-                    id="mention-distill-run"
-                    data-testid="mention-distill-run"
+                    value="cancel"
+                    id="group-edit-cancel"
+                    data-testid="group-edit-cancel"
                 >
-                    Search
+                    Cancel
                 </button>
-            </div>
+                <button
+                    type="button"
+                    value="ok"
+                    id="group-edit-save"
+                    data-testid="group-edit-save"
+                >
+                    Save
+                </button>
+            </menu>
+        </form>
+    </dialog>
 
-            <div
-                id="mention-pane-raw"
-                class="mention-pane"
-                role="tabpanel"
-                data-testid="mention-pane-raw"
+    <ul
+        id="node-context-menu"
+        class="node-context-menu"
+        data-testid="node-context-menu"
+        role="menu"
+        hidden
+    ></ul>
+
+    <dialog id="curator-panel" class="curator-panel" data-testid="curator-panel">
+        <form method="dialog" class="curator-form">
+            <header class="curator-header">
+                <h2>Ask the Curator</h2>
+                <p class="curator-subtitle">
+                    The Curator answers in an isolated agent session so the
+                    current chat stays uncontaminated.
+                </p>
+            </header>
+            <div class="curator-scope" data-testid="curator-scope">
+                <span class="curator-scope-label">Scope:</span>
+                <span
+                    id="curator-scope-summary"
+                    data-testid="curator-scope-summary"
+                ></span>
+            </div>
+            <fieldset class="curator-mode" data-testid="curator-mode">
+                <legend>Context</legend>
+                <label>
+                    <input
+                        type="radio"
+                        name="curator-mode"
+                        value="raw"
+                        checked
+                        data-testid="curator-mode-raw"
+                    />
+                    Raw events
+                </label>
+                <label>
+                    <input
+                        type="radio"
+                        name="curator-mode"
+                        value="distill"
+                        data-testid="curator-mode-distill"
+                    />
+                    Distilled memory
+                </label>
+            </fieldset>
+            <label class="curator-question-label">
+                <span>Question</span>
+                <textarea
+                    id="curator-question"
+                    data-testid="curator-question"
+                    rows="3"
+                    maxlength="8000"
+                    placeholder="What would you like the Curator to summarize?"
+                    required
+                ></textarea>
+            </label>
+            <section
+                class="curator-answer"
+                data-testid="curator-answer-section"
                 hidden
             >
-                <label>
-                    <span>Target session</span>
-                    <select
-                        id="mention-raw-session"
-                        data-testid="mention-raw-session"
-                    ></select>
-                </label>
-                <label>
-                    <span>Query (substring, case-insensitive)</span>
-                    <input
-                        type="text"
-                        id="mention-raw-query"
-                        data-testid="mention-raw-query"
-                        maxlength="4000"
-                        placeholder="e.g. work_mem"
-                    />
-                </label>
-                <button
-                    type="button"
-                    id="mention-raw-run"
-                    data-testid="mention-raw-run"
-                >
-                    Search
-                </button>
-            </div>
-
-            <pre
-                id="mention-results"
-                class="mention-results"
-                data-testid="mention-results"
-            ></pre>
-
+                <header class="curator-answer-header">
+                    <span class="curator-role">Curator</span>
+                    <span
+                        id="curator-answer-status"
+                        class="curator-status"
+                        data-testid="curator-status"
+                    ></span>
+                </header>
+                <pre
+                    id="curator-answer"
+                    class="curator-answer-body"
+                    data-testid="curator-answer"
+                ></pre>
+            </section>
             <menu>
                 <button
                     type="button"
                     value="cancel"
-                    id="mention-cancel"
-                    data-testid="mention-cancel"
+                    id="curator-close"
+                    data-testid="curator-close"
                 >
                     Close
                 </button>
                 <button
                     type="button"
-                    value="adopt"
-                    id="mention-adopt"
-                    data-testid="mention-adopt"
-                    disabled
+                    value="ok"
+                    id="curator-ask"
+                    data-testid="curator-ask"
                 >
-                    Adopt for next turn
+                    Ask
                 </button>
             </menu>
         </form>

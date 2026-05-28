@@ -169,6 +169,73 @@ def test_agent_cwd_isolation_invalid_rejected() -> None:
         )
 
 
+def test_agent_cwd_inside_git_rejected_under_per_session(tmp_path: pytest.TempPathFactory) -> None:
+    """Per-session isolation must refuse a cwd nested in a git repo.
+
+    Claude Code keys auto-memory by the git root, not by the cwd, so
+    putting agent_cwd inside a git checkout silently collapses every
+    atelier session to a single shared memory dir -- exactly the
+    cross-session contamination per-session isolation was supposed to
+    prevent. Reject the combination at startup with a clear message.
+    """
+
+    repo = tmp_path / "repo"  # type: ignore[attr-defined]
+    (repo / ".git").mkdir(parents=True)
+    inner = repo / "wk"
+    inner.mkdir()
+
+    with pytest.raises(ConfigError, match="sits inside a git repository"):
+        AtelierConfig.from_env(
+            {
+                "ATELIER_DATABASE_URL": _DB,
+                "ATELIER_AGENT_BACKEND": "claude_code",
+                "ATELIER_AGENT_CWD": str(inner),
+            }
+        )
+
+
+def test_agent_cwd_inside_git_allowed_with_escape_hatch(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """``ATELIER_ALLOW_AGENT_CWD_INSIDE_GIT=1`` opts back in, at user risk."""
+
+    repo = tmp_path / "repo"  # type: ignore[attr-defined]
+    (repo / ".git").mkdir(parents=True)
+    inner = repo / "wk"
+    inner.mkdir()
+
+    cfg = AtelierConfig.from_env(
+        {
+            "ATELIER_DATABASE_URL": _DB,
+            "ATELIER_AGENT_BACKEND": "claude_code",
+            "ATELIER_AGENT_CWD": str(inner),
+            "ATELIER_ALLOW_AGENT_CWD_INSIDE_GIT": "1",
+        }
+    )
+    assert cfg.allow_agent_cwd_inside_git is True
+
+
+def test_agent_cwd_inside_git_allowed_under_shared_isolation(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """``shared`` isolation has no per-session promise to break, so the guard skips."""
+
+    repo = tmp_path / "repo"  # type: ignore[attr-defined]
+    (repo / ".git").mkdir(parents=True)
+    inner = repo / "wk"
+    inner.mkdir()
+
+    cfg = AtelierConfig.from_env(
+        {
+            "ATELIER_DATABASE_URL": _DB,
+            "ATELIER_AGENT_BACKEND": "claude_code",
+            "ATELIER_AGENT_CWD": str(inner),
+            "ATELIER_AGENT_CWD_ISOLATION": "shared",
+        }
+    )
+    assert cfg.agent_cwd_isolation == "shared"
+
+
 def test_unknown_agent_backend_rejected() -> None:
     with pytest.raises(ConfigError, match="unsupported agent_backend"):
         AtelierConfig.from_env(

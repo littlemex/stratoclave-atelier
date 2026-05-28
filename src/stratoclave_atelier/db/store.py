@@ -40,11 +40,49 @@ class Store(Protocol):
     """Read/write surface for the five atelier tables."""
 
     # groups -----------------------------------------------------------------
-    async def create_group(self, *, name: str, description: str | None) -> Group: ...
+    async def create_group(
+        self,
+        *,
+        name: str,
+        description: str | None,
+        color: str,
+    ) -> Group: ...
 
     async def get_group(self, group_id: UUID) -> Group: ...
 
     async def list_groups(self) -> list[Group]: ...
+
+    async def update_group(
+        self,
+        group_id: UUID,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        color: str | None = None,
+    ) -> Group:
+        """Patch a group in place.
+
+        ``None`` means "no change" for each field; the handler rejects
+        calls with every field ``None`` so an empty PATCH body never
+        silently no-ops.
+        """
+        ...
+
+    async def delete_group(self, group_id: UUID) -> None: ...
+
+    async def update_session_group(
+        self,
+        session_id: UUID,
+        group_id: UUID | None,
+    ) -> Session:
+        """Move ``session_id`` into ``group_id`` (or detach when ``None``).
+
+        Raises :class:`ConflictError` when the session is not a root
+        (``parent_session_id IS NOT NULL``) -- forks inherit grouping
+        transitively via their parent and should not be re-grouped
+        independently.
+        """
+        ...
 
     # sessions ---------------------------------------------------------------
     async def create_session(

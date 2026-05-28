@@ -29,11 +29,18 @@ EventKind = Literal[
 
 @dataclass(frozen=True, slots=True)
 class Group:
-    """A container for related sessions."""
+    """A container for related sessions.
+
+    Stage L surfaces ``color`` in the Fork DAG so root sessions belonging
+    to a group render with the group's accent colour. Stored as a
+    7-character hex string (``#RRGGBB``); the API layer normalises and
+    validates the format on the way in.
+    """
 
     group_id: UUID
     name: str
     description: str | None
+    color: str
     created_at: datetime
     updated_at: datetime
 
@@ -144,6 +151,9 @@ class ForkGraphNode:
     (we render those with a different stroke). ``parent_version_id`` is
     the version this session was forked from (``None`` for root
     sessions), and ``fork_seq`` is the turn at which the fork was taken.
+
+    Stage L: ``group_id`` mirrors ``Session.group_id`` so the SVG
+    renderer can colour nodes by group without a second round-trip.
     """
 
     session_id: UUID
@@ -153,6 +163,7 @@ class ForkGraphNode:
     parent_version_id: UUID | None
     fork_seq: int | None
     versions: tuple[ForkGraphVersion, ...]
+    group_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -89,6 +89,7 @@ def build_fork_graph(
                     )
                     for v in own_versions
                 ),
+                group_id=s.group_id,
             )
         )
 
