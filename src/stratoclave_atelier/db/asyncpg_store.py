@@ -59,17 +59,25 @@ class AsyncpgStore(Store):
         await self._engine.dispose()
 
     # groups -----------------------------------------------------------------
-    async def create_group(self, *, name: str, description: str | None) -> Group:
+    _GROUP_COLUMNS = "group_id, name, description, color, created_at, updated_at"
+
+    async def create_group(
+        self,
+        *,
+        name: str,
+        description: str | None,
+        color: str,
+    ) -> Group:
         group_id = uuid4()
         async with self._engine.begin() as conn:
             row = (
                 await conn.execute(
                     text(
-                        "INSERT INTO groups (group_id, name, description) "
-                        "VALUES (:gid, :name, :desc) "
-                        "RETURNING group_id, name, description, created_at, updated_at"
+                        "INSERT INTO groups (group_id, name, description, color) "
+                        "VALUES (:gid, :name, :desc, :color) "
+                        f"RETURNING {self._GROUP_COLUMNS}"
                     ),
-                    {"gid": group_id, "name": name, "desc": description},
+                    {"gid": group_id, "name": name, "desc": description, "color": color},
                 )
             ).one()
         return _row_to_group(row)
@@ -78,10 +86,7 @@ class AsyncpgStore(Store):
         async with self._engine.connect() as conn:
             row = (
                 await conn.execute(
-                    text(
-                        "SELECT group_id, name, description, created_at, updated_at "
-                        "FROM groups WHERE group_id = :gid"
-                    ),
+                    text(f"SELECT {self._GROUP_COLUMNS} FROM groups WHERE group_id = :gid"),
                     {"gid": group_id},
                 )
             ).one_or_none()
@@ -93,13 +98,94 @@ class AsyncpgStore(Store):
         async with self._engine.connect() as conn:
             rows = (
                 await conn.execute(
-                    text(
-                        "SELECT group_id, name, description, created_at, updated_at "
-                        "FROM groups ORDER BY created_at"
-                    )
+                    text(f"SELECT {self._GROUP_COLUMNS} FROM groups ORDER BY created_at")
                 )
             ).all()
         return [_row_to_group(r) for r in rows]
+
+    async def update_group(
+        self,
+        group_id: UUID,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        color: str | None = None,
+    ) -> Group:
+        if name is None and description is None and color is None:
+            raise ConflictError("update_group requires at least one field to change")
+        sets: list[str] = []
+        params: dict[str, Any] = {"gid": group_id}
+        if name is not None:
+            sets.append("name = :name")
+            params["name"] = name
+        if description is not None:
+            sets.append("description = :desc")
+            params["desc"] = description
+        if color is not None:
+            sets.append("color = :color")
+            params["color"] = color
+        sets.append("updated_at = now()")
+        async with self._engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        f"UPDATE groups SET {', '.join(sets)} "
+                        "WHERE group_id = :gid "
+                        f"RETURNING {self._GROUP_COLUMNS}"
+                    ),
+                    params,
+                )
+            ).one_or_none()
+        if row is None:
+            raise NotFoundError(f"group {group_id} not found")
+        return _row_to_group(row)
+
+    async def delete_group(self, group_id: UUID) -> None:
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                text("DELETE FROM groups WHERE group_id = :gid"),
+                {"gid": group_id},
+            )
+        if result.rowcount == 0:
+            raise NotFoundError(f"group {group_id} not found")
+
+    async def update_session_group(
+        self,
+        session_id: UUID,
+        group_id: UUID | None,
+    ) -> Session:
+        async with self._engine.begin() as conn:
+            current = (
+                await conn.execute(
+                    text(
+                        f"SELECT {self._SESSION_COLUMNS} FROM sessions "
+                        "WHERE session_id = :sid FOR UPDATE"
+                    ),
+                    {"sid": session_id},
+                )
+            ).one_or_none()
+            if current is None:
+                raise NotFoundError(f"session {session_id} not found")
+            if current.parent_session_id is not None:
+                raise ConflictError(
+                    "only root sessions can be assigned to a group; "
+                    f"session {session_id} is a fork of {current.parent_session_id}"
+                )
+            try:
+                row = (
+                    await conn.execute(
+                        text(
+                            "UPDATE sessions "
+                            "SET group_id = :gid, updated_at = now() "
+                            "WHERE session_id = :sid "
+                            f"RETURNING {self._SESSION_COLUMNS}"
+                        ),
+                        {"sid": session_id, "gid": group_id},
+                    )
+                ).one()
+            except IntegrityError as exc:
+                raise NotFoundError(str(exc.orig)) from exc
+        return _row_to_session(row)
 
     # sessions ---------------------------------------------------------------
     _SESSION_COLUMNS = (
@@ -480,6 +566,7 @@ def _row_to_group(row: Any) -> Group:
         group_id=row.group_id,
         name=row.name,
         description=row.description,
+        color=row.color,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

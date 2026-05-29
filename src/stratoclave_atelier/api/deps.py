@@ -17,6 +17,7 @@ from stratoclave_atelier.auto_namer import AutoNamer
 from stratoclave_atelier.blobs import BlobStore
 from stratoclave_atelier.config import AtelierConfig
 from stratoclave_atelier.core import ConflictError, NotFoundError
+from stratoclave_atelier.curator import CuratorRunner
 from stratoclave_atelier.db import Store
 from stratoclave_atelier.events_bus import EventBus
 from stratoclave_atelier.memory import MemoryService
@@ -133,6 +134,24 @@ def get_config(request: Request) -> AtelierConfig:
     return cast(AtelierConfig, cfg)
 
 
+def get_curator_runner(request: Request) -> CuratorRunner:
+    """Return the :class:`CuratorRunner` attached to the FastAPI app.
+
+    Stage L wires this in :func:`stratoclave_atelier.server.create_app`
+    via the lifespan callback. The runner is always non-None even when
+    no agent backend is configured -- handlers should consult
+    ``runner.enabled`` and surface a 503 when false.
+    """
+
+    runner = getattr(request.app.state, "curator_runner", None)
+    if runner is None:  # pragma: no cover -- developer error if hit
+        raise RuntimeError(
+            "CuratorRunner is not configured on app.state.curator_runner; "
+            "build the app via create_app() so the lifespan can attach one"
+        )
+    return cast(CuratorRunner, runner)
+
+
 StoreDep = Annotated[Store, Depends(get_store)]
 BlobStoreDep = Annotated[BlobStore, Depends(get_blob_store)]
 SnapshotResolverDep = Annotated[SnapshotResolver, Depends(get_snapshot_resolver)]
@@ -140,6 +159,7 @@ EventBusDep = Annotated[EventBus, Depends(get_event_bus)]
 MemoryServiceDep = Annotated[MemoryService, Depends(get_memory_service)]
 AutoNamerDep = Annotated[AutoNamer, Depends(get_auto_namer)]
 ConfigDep = Annotated[AtelierConfig, Depends(get_config)]
+CuratorRunnerDep = Annotated[CuratorRunner, Depends(get_curator_runner)]
 
 
 def http_not_found(error: NotFoundError) -> HTTPException:

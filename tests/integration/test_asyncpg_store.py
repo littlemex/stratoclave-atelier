@@ -69,16 +69,57 @@ async def store() -> AsyncIterator[AsyncpgStore]:
 
 
 async def test_create_and_list_groups(store: AsyncpgStore) -> None:
-    a = await store.create_group(name="alpha", description=None)
-    b = await store.create_group(name="beta", description="second")
+    a = await store.create_group(name="alpha", description=None, color="#3B82F6")
+    b = await store.create_group(name="beta", description="second", color="#10B981")
     listed = await store.list_groups()
     assert [g.group_id for g in listed] == [a.group_id, b.group_id]
     assert (await store.get_group(b.group_id)).description == "second"
+    assert b.color == "#10B981"
 
 
 async def test_get_unknown_group_raises(store: AsyncpgStore) -> None:
     with pytest.raises(NotFoundError):
         await store.get_group(uuid4())
+
+
+async def test_update_group_recolours_and_renames(store: AsyncpgStore) -> None:
+    group = await store.create_group(name="alpha", description=None, color="#3B82F6")
+    updated = await store.update_group(group.group_id, name="alpha2", color="#EF4444")
+    assert updated.name == "alpha2"
+    assert updated.color == "#EF4444"
+
+
+async def test_delete_group_detaches_sessions(store: AsyncpgStore) -> None:
+    group = await store.create_group(name="alpha", description=None, color="#3B82F6")
+    session = await store.create_session(title="t", group_id=group.group_id)
+    await store.delete_group(group.group_id)
+    refreshed = await store.get_session(session.session_id)
+    assert refreshed.group_id is None
+
+
+async def test_update_session_group_root_only(store: AsyncpgStore) -> None:
+    group = await store.create_group(name="alpha", description=None, color="#3B82F6")
+    parent = await store.create_session(title="p")
+    version = await store.create_version(
+        session_id=parent.session_id,
+        blob_sha="a" * 64,
+        blob_path="x.jsonl",
+        start_seq=0,
+        end_seq=2,
+        byte_size=10,
+    )
+    child = await store.create_session(
+        title="c",
+        parent_session_id=parent.session_id,
+        parent_version_id=version.version_id,
+        fork_seq=1,
+    )
+
+    moved = await store.update_session_group(parent.session_id, group.group_id)
+    assert moved.group_id == group.group_id
+
+    with pytest.raises(ConflictError, match="only root sessions"):
+        await store.update_session_group(child.session_id, group.group_id)
 
 
 # sessions + fork --------------------------------------------------------------

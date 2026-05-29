@@ -28,6 +28,7 @@ from stratoclave_atelier.agent_runner import AgentRunner
 from stratoclave_atelier.api import (
     agent_router,
     agent_runs_router,
+    curator_router,
     events_router,
     fork_graph_router,
     groups_router,
@@ -40,6 +41,7 @@ from stratoclave_atelier.api import (
 from stratoclave_atelier.auto_namer import AutoNamer, build_auto_namer
 from stratoclave_atelier.blobs import BlobStore, FileBlobStore
 from stratoclave_atelier.config import AtelierConfig
+from stratoclave_atelier.curator import CuratorRunner
 from stratoclave_atelier.db import AsyncpgStore, Store, create_engine
 from stratoclave_atelier.events_bus import EventBus
 from stratoclave_atelier.memory import MemoryService, build_memory_service
@@ -95,6 +97,7 @@ def create_app(
         if store is not None:
             app.state.store = store
             app.state.agent_runner = AgentRunner(config=cfg, store=store, bus=bus, memory=memory)
+            app.state.curator_runner = CuratorRunner(config=cfg, store=store, memory=memory)
             try:
                 yield
             finally:
@@ -109,6 +112,7 @@ def create_app(
         app.state.agent_runner = AgentRunner(
             config=cfg, store=runtime_store, bus=bus, memory=memory
         )
+        app.state.curator_runner = CuratorRunner(config=cfg, store=runtime_store, memory=memory)
         try:
             yield
         finally:
@@ -135,6 +139,7 @@ def create_app(
     app.include_router(agent_runs_router)
     app.include_router(agent_router)
     app.include_router(memory_router)
+    app.include_router(curator_router)
     _mount_frontend(app)
     return app
 

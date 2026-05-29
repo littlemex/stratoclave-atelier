@@ -60,13 +60,20 @@ class InMemoryStore(Store):
         return datetime.now(tz=UTC)
 
     # groups -----------------------------------------------------------------
-    async def create_group(self, *, name: str, description: str | None) -> Group:
+    async def create_group(
+        self,
+        *,
+        name: str,
+        description: str | None,
+        color: str,
+    ) -> Group:
         async with self._lock:
             now = self._now()
             group = Group(
                 group_id=uuid4(),
                 name=name,
                 description=description,
+                color=color,
                 created_at=now,
                 updated_at=now,
             )
@@ -83,6 +90,85 @@ class InMemoryStore(Store):
     async def list_groups(self) -> list[Group]:
         async with self._lock:
             return sorted(self._groups.values(), key=lambda g: g.created_at)
+
+    async def update_group(
+        self,
+        group_id: UUID,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        color: str | None = None,
+    ) -> Group:
+        if name is None and description is None and color is None:
+            raise ConflictError("update_group requires at least one field to change")
+        async with self._lock:
+            current = self._groups.get(group_id)
+            if current is None:
+                raise NotFoundError(f"group {group_id} not found")
+            updated = Group(
+                group_id=current.group_id,
+                name=name if name is not None else current.name,
+                description=description if description is not None else current.description,
+                color=color if color is not None else current.color,
+                created_at=current.created_at,
+                updated_at=self._now(),
+            )
+            self._groups[group_id] = updated
+            return updated
+
+    async def delete_group(self, group_id: UUID) -> None:
+        async with self._lock:
+            if group_id not in self._groups:
+                raise NotFoundError(f"group {group_id} not found")
+            # Detach any sessions still pointing at this group so the
+            # FK invariant matches the asyncpg backend's ON DELETE SET
+            # NULL behaviour.
+            for sid, session in list(self._sessions.items()):
+                if session.group_id == group_id:
+                    self._sessions[sid] = Session(
+                        session_id=session.session_id,
+                        group_id=None,
+                        title=session.title,
+                        parent_session_id=session.parent_session_id,
+                        parent_version_id=session.parent_version_id,
+                        fork_seq=session.fork_seq,
+                        status=session.status,
+                        created_at=session.created_at,
+                        updated_at=self._now(),
+                        agent_backend=session.agent_backend,
+                    )
+            del self._groups[group_id]
+
+    async def update_session_group(
+        self,
+        session_id: UUID,
+        group_id: UUID | None,
+    ) -> Session:
+        async with self._lock:
+            current = self._sessions.get(session_id)
+            if current is None:
+                raise NotFoundError(f"session {session_id} not found")
+            if current.parent_session_id is not None:
+                raise ConflictError(
+                    "only root sessions can be assigned to a group; "
+                    f"session {session_id} is a fork of {current.parent_session_id}"
+                )
+            if group_id is not None and group_id not in self._groups:
+                raise NotFoundError(f"group {group_id} not found")
+            updated = Session(
+                session_id=current.session_id,
+                group_id=group_id,
+                title=current.title,
+                parent_session_id=current.parent_session_id,
+                parent_version_id=current.parent_version_id,
+                fork_seq=current.fork_seq,
+                status=current.status,
+                created_at=current.created_at,
+                updated_at=self._now(),
+                agent_backend=current.agent_backend,
+            )
+            self._sessions[session_id] = updated
+            return updated
 
     # sessions ---------------------------------------------------------------
     async def create_session(

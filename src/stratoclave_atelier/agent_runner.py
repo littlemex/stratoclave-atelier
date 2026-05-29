@@ -214,18 +214,41 @@ class AgentRunner:
         await asyncio.to_thread(self._copy_claude_memory_dir, parent_path, child_path)
 
     @staticmethod
-    def _claude_project_memory_dir(cwd: Path) -> Path:
-        """Return the ``~/.claude/projects/<slug>/memory`` path for ``cwd``.
+    def _resolve_claude_project_root(cwd: Path) -> Path:
+        """Return the directory Claude Code keys auto-memory by.
 
-        Claude Code derives the project slug from ``realpath(cwd)`` by
-        replacing every ``/`` with ``-``. On macOS that means ``/tmp``
-        becomes ``-private-tmp-...`` because the realpath crosses the
-        ``/private`` boundary; we mirror that resolution so the slug
-        matches whatever Claude wrote.
+        Claude Code does not slug the cwd directly: it walks up the
+        directory chain looking for a ``.git`` marker, and uses *that*
+        ancestor (or the cwd itself when no ``.git`` is found) as the
+        project root. The auto-memory dir at
+        ``~/.claude/projects/<slug>/memory`` is keyed off the project
+        root, not the cwd, so two atelier sessions whose cwds are
+        siblings inside the *same* git repo silently share a single
+        memory directory.
+
+        Mirroring that resolution here means our copy/seed plumbing
+        targets the directory Claude actually reads from, instead of a
+        per-cwd slug Claude never writes.
         """
 
         real = cwd.resolve()
-        slug = str(real).replace("/", "-")
+        for candidate in (real, *real.parents):
+            if (candidate / ".git").exists():
+                return candidate
+        return real
+
+    @classmethod
+    def _claude_project_memory_dir(cls, cwd: Path) -> Path:
+        """Return the ``~/.claude/projects/<slug>/memory`` path for ``cwd``.
+
+        See :meth:`_resolve_claude_project_root` for how the slug is
+        chosen. The slug is the resolved project-root path with every
+        ``/`` replaced by ``-`` (so ``/private/tmp/x`` becomes
+        ``-private-tmp-x``).
+        """
+
+        root = cls._resolve_claude_project_root(cwd)
+        slug = str(root).replace("/", "-")
         return Path.home() / ".claude" / "projects" / slug / "memory"
 
     @classmethod

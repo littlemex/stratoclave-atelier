@@ -23,10 +23,30 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
+from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, cast
 
 from stratoclave_atelier.core.errors import ConfigError
+
+
+def _git_ancestor(cwd: Path) -> Path | None:
+    """Return the first ancestor of ``cwd`` that contains ``.git``, else None.
+
+    Used to detect when ``agent_cwd`` sits inside a git checkout, which
+    breaks per-session memory isolation because Claude Code keys
+    auto-memory by the git root, not by the cwd.
+    """
+
+    try:
+        real = cwd.resolve()
+    except OSError:
+        return None
+    for candidate in (real, *real.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
 
 AtelierAuthMode = Literal["none", "bearer", "stratoclave_cognito"]
 AtelierAgentBackend = Literal["none", "claude_code", "kiro_code", "mock"]
@@ -174,6 +194,11 @@ class AtelierConfig:
     parent/child branches. ``shared`` reverts to the Stage G behaviour
     where every session points at the same configured cwd.
     """
+    allow_agent_cwd_inside_git: bool = False
+    """Escape hatch: allow ``agent_cwd`` to live inside a git checkout
+    even though that breaks per-session auto-memory isolation. Default
+    is ``False`` so a misconfiguration becomes a startup error rather
+    than a silent identity leak."""
     distill_enabled: bool = False
     distill_database_url: str | None = None
     distill_auto_ingest: bool = True
@@ -237,6 +262,30 @@ class AtelierConfig:
                 "snapshot_resolver='distill' requires distill_enabled=True "
                 "(set ATELIER_DISTILL_ENABLED=true)"
             )
+        # Stage L follow-up: Claude Code keys auto-memory by the project
+        # root (the first ``.git`` ancestor of the cwd), not by the cwd
+        # itself. When per-session isolation is on, putting the
+        # configured agent cwd *inside* a git tree silently collapses
+        # every session to the same memory dir -- the contamination the
+        # Stage K follow-up was supposed to fix. Reject this combination
+        # eagerly so an operator gets a clear error at startup instead
+        # of leaked identity facts hours later. ``allow_agent_cwd_inside_git``
+        # exists as an explicit escape hatch when this is intentional
+        # (e.g. ``shared`` isolation mode, or the operator owns the
+        # contamination risk).
+        if self.agent_cwd_isolation == "per_session" and not self.allow_agent_cwd_inside_git:
+            for name in self.resolved_backends() or ():
+                cwd = self.cwd_for_backend(name)
+                if cwd and _git_ancestor(Path(cwd)) is not None:
+                    raise ConfigError(
+                        f"agent_cwd for backend {name!r} sits inside a git "
+                        f"repository ({_git_ancestor(Path(cwd))}); Claude "
+                        "Code keys auto-memory by the git root, so per-session "
+                        "isolation will not work and sibling sessions will "
+                        "leak identity / context. Move agent_cwd outside any "
+                        "git checkout (e.g. ~/.atelier/cwd) or set "
+                        "ATELIER_ALLOW_AGENT_CWD_INSIDE_GIT=1 to override."
+                    )
 
     # -- Stage H helpers --------------------------------------------------
     def cwd_for_backend(self, backend: str) -> str | None:
@@ -407,6 +456,11 @@ class AtelierConfig:
             agent_memory_enabled=pop_bool("agent_memory_enabled", "ATELIER_AGENT_MEMORY", True),
             snapshot_resolver=cast(AtelierSnapshotResolver, snapshot_resolver),
             agent_cwd_isolation=cast(AtelierAgentCwdIsolation, agent_cwd_isolation),
+            allow_agent_cwd_inside_git=pop_bool(
+                "allow_agent_cwd_inside_git",
+                "ATELIER_ALLOW_AGENT_CWD_INSIDE_GIT",
+                False,
+            ),
         )
         if overrides:
             unknown = ", ".join(sorted(overrides))

@@ -481,9 +481,59 @@ async def test_seed_branch_cwd_noop_when_shared(stub_env: Mapping[str, str], tmp
             "ATELIER_AGENT_BACKEND": "claude_code",
             "ATELIER_AGENT_CWD": str(tmp_path),
             "ATELIER_AGENT_CWD_ISOLATION": "shared",
+            "ATELIER_ALLOW_AGENT_CWD_INSIDE_GIT": "1",
         },
     )
     runner = AgentRunner(config=cfg, store=InMemoryStore(), bus=EventBus())
 
     # Should not raise, even though parent_cwd == child_cwd in shared mode.
     await runner.seed_branch_cwd(parent_session_id=uuid4(), child_session_id=uuid4())
+
+
+def test_resolve_claude_project_root_finds_git_ancestor(tmp_path: Any) -> None:
+    """Claude Code keys auto-memory off the *git root*, not the cwd.
+
+    A regression here is the bug behind the May-28 contamination
+    incident: per-session cwds nested inside a git checkout silently
+    shared a single ``~/.claude/projects/<repo-slug>/memory`` because
+    Claude walks up to find ``.git`` before slugging. Pin the
+    resolution rule so we never accidentally slug the cwd itself again.
+    """
+
+    from stratoclave_atelier.agent_runner import AgentRunner
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    nested = repo / "wk" / "sessions" / "abc"
+    nested.mkdir(parents=True)
+
+    root = AgentRunner._resolve_claude_project_root(nested)
+    assert root == repo.resolve()
+
+    # No git ancestor anywhere -> returns the cwd itself (post-resolve).
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    assert AgentRunner._resolve_claude_project_root(bare) == bare.resolve()
+
+
+def test_claude_project_memory_dir_uses_git_root_slug(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_claude_project_memory_dir`` slug is derived from the git root."""
+
+    from pathlib import Path
+
+    from stratoclave_atelier.agent_runner import AgentRunner
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    nested = repo / "wk" / "sessions" / "xyz"
+    nested.mkdir(parents=True)
+
+    expected_slug = str(repo.resolve()).replace("/", "-")
+    expected = fake_home / ".claude" / "projects" / expected_slug / "memory"
+    assert AgentRunner._claude_project_memory_dir(nested) == expected

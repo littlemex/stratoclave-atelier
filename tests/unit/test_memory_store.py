@@ -24,11 +24,65 @@ def store() -> InMemoryStore:
 
 
 async def test_create_and_list_groups(store: InMemoryStore) -> None:
-    await store.create_group(name="A", description=None)
-    b = await store.create_group(name="B", description="second")
+    await store.create_group(name="A", description=None, color="#3B82F6")
+    b = await store.create_group(name="B", description="second", color="#10B981")
     listed = await store.list_groups()
     assert [g.name for g in listed] == ["A", "B"]
     assert (await store.get_group(b.group_id)).description == "second"
+    assert b.color == "#10B981"
+
+
+async def test_update_group_changes_fields(store: InMemoryStore) -> None:
+    group = await store.create_group(name="A", description=None, color="#3B82F6")
+    updated = await store.update_group(group.group_id, name="A1", color="#EF4444")
+    assert updated.name == "A1"
+    assert updated.color == "#EF4444"
+    assert updated.description is None
+
+
+async def test_update_group_rejects_empty_patch(store: InMemoryStore) -> None:
+    group = await store.create_group(name="A", description=None, color="#3B82F6")
+    with pytest.raises(ConflictError, match="at least one field"):
+        await store.update_group(group.group_id)
+
+
+async def test_delete_group_detaches_member_sessions(store: InMemoryStore) -> None:
+    group = await store.create_group(name="A", description=None, color="#3B82F6")
+    session = await store.create_session(title="t", group_id=group.group_id)
+    await store.delete_group(group.group_id)
+    refreshed = await store.get_session(session.session_id)
+    assert refreshed.group_id is None
+
+
+async def test_update_session_group_assigns_root(store: InMemoryStore) -> None:
+    group = await store.create_group(name="A", description=None, color="#3B82F6")
+    session = await store.create_session(title="t")
+    moved = await store.update_session_group(session.session_id, group.group_id)
+    assert moved.group_id == group.group_id
+
+    detached = await store.update_session_group(session.session_id, None)
+    assert detached.group_id is None
+
+
+async def test_update_session_group_rejects_fork(store: InMemoryStore) -> None:
+    group = await store.create_group(name="A", description=None, color="#3B82F6")
+    parent = await store.create_session(title="p")
+    version = await store.create_version(
+        session_id=parent.session_id,
+        blob_sha="a" * 64,
+        blob_path="x.jsonl",
+        start_seq=0,
+        end_seq=2,
+        byte_size=10,
+    )
+    child = await store.create_session(
+        title="c",
+        parent_session_id=parent.session_id,
+        parent_version_id=version.version_id,
+        fork_seq=1,
+    )
+    with pytest.raises(ConflictError, match="only root sessions"):
+        await store.update_session_group(child.session_id, group.group_id)
 
 
 async def test_get_unknown_group_raises(store: InMemoryStore) -> None:
@@ -48,7 +102,7 @@ async def test_create_session_without_parent(store: InMemoryStore) -> None:
 
 
 async def test_create_session_in_group(store: InMemoryStore) -> None:
-    group = await store.create_group(name="g", description=None)
+    group = await store.create_group(name="g", description=None, color="#3B82F6")
     session = await store.create_session(title="t", group_id=group.group_id)
     listed = await store.list_sessions(group_id=group.group_id)
     assert [s.session_id for s in listed] == [session.session_id]

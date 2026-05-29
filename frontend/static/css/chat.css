@@ -612,7 +612,7 @@ dialog.edge-memo::backdrop {
 }
 
 /* ---------------------------------------------------------------------------
- * Stage K: cross-session @ mention panel + adopted-memory chip
+ * Adopted-memory chip (queued context for the next turn)
  * ------------------------------------------------------------------------ */
 
 .memory-chip {
@@ -652,74 +652,205 @@ dialog.edge-memo::backdrop {
     color: var(--text);
 }
 
-.mention-panel {
+/* ---------------------------------------------------------------------------
+ * Stage L: groups sidebar + node context menu + group edit dialog
+ * ------------------------------------------------------------------------ */
+
+.group-panel {
+    border-bottom: 1px solid var(--border);
+    padding: 8px 12px 10px;
+    flex-shrink: 0;
+}
+
+.group-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+.group-panel-header h3 {
+    margin: 0;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+}
+
+#button-group-new {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    width: 22px;
+    height: 22px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+}
+
+#button-group-new:hover {
+    background: var(--border);
+}
+
+.group-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 160px;
+    overflow-y: auto;
+}
+
+.group-list:empty::after {
+    content: "No groups yet.";
+    color: var(--muted);
+    font-size: 12px;
+    padding: 4px 0;
+}
+
+.group-list-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.group-list-item:hover {
+    background: var(--surface-2);
+}
+
+.group-list-item.is-active {
+    background: var(--surface-2);
+    border: 1px solid var(--accent);
+}
+
+.group-swatch {
+    flex-shrink: 0;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.group-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.group-edit-button {
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0 2px;
+}
+
+.group-edit-button:hover {
+    color: var(--text);
+}
+
+.dag-node.has-group rect {
+    stroke-width: 2.5px;
+}
+
+.node-context-menu {
+    position: fixed;
+    list-style: none;
+    margin: 0;
+    padding: 4px 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    min-width: 180px;
+    max-height: 240px;
+    overflow-y: auto;
+    z-index: 1000;
+    font-size: 12px;
+}
+
+.node-context-menu[hidden] {
+    display: none;
+}
+
+.node-context-menu li {
+    padding: 6px 12px;
+    cursor: pointer;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.node-context-menu li:hover {
+    background: var(--surface-2);
+}
+
+.node-context-menu li.is-divider {
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+    padding-top: 4px;
+    color: var(--muted);
+    cursor: default;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.node-context-menu li.is-disabled {
+    color: var(--muted);
+    cursor: not-allowed;
+}
+
+.node-context-menu li.is-disabled:hover {
+    background: transparent;
+}
+
+.group-edit {
     border: 1px solid var(--border);
     background: var(--surface);
     color: var(--text);
     padding: 0;
-    width: min(640px, 90vw);
+    width: min(420px, 90vw);
     border-radius: 8px;
 }
 
-.mention-panel::backdrop {
+.group-edit::backdrop {
     background: rgba(0, 0, 0, 0.6);
 }
 
-.mention-form {
+.group-edit-form {
     display: flex;
     flex-direction: column;
     gap: 12px;
     padding: 16px;
 }
 
-.mention-form h2 {
+.group-edit-form h2 {
     margin: 0;
     font-size: 16px;
 }
 
-.mention-tabs {
-    display: flex;
-    gap: 6px;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 6px;
-}
-
-.mention-tab {
-    background: transparent;
-    color: var(--muted);
-    border: 1px solid transparent;
-    padding: 4px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-}
-
-.mention-tab.is-active {
-    color: var(--text);
-    border-color: var(--border);
-    background: var(--surface-2);
-}
-
-.mention-tab[disabled] {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-.mention-pane[hidden] {
-    display: none;
-}
-
-.mention-pane label {
+.group-edit-form label {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    margin-bottom: 8px;
     font-size: 12px;
     color: var(--muted);
 }
 
-.mention-pane select,
-.mention-pane input[type="text"] {
+.group-edit-form input[type="text"],
+.group-edit-form input[type="color"] {
     background: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
@@ -729,51 +860,13 @@ dialog.edge-memo::backdrop {
     font-family: inherit;
 }
 
-.mention-pane select[multiple] {
-    min-height: 96px;
-}
-
-.mention-pane button {
-    background: var(--surface-2);
-    color: var(--text);
-    border: 1px solid var(--border);
-    padding: 6px 12px;
-    border-radius: 4px;
+.group-edit-form input[type="color"] {
+    height: 32px;
+    padding: 2px;
     cursor: pointer;
-    align-self: flex-start;
-    font-size: 12px;
 }
 
-.mention-pane button:hover {
-    background: var(--border);
-}
-
-.mention-disabled {
-    margin: 0 0 8px;
-    padding: 6px 8px;
-    background: rgba(248, 81, 73, 0.08);
-    border: 1px solid rgba(248, 81, 73, 0.4);
-    color: var(--text);
-    font-size: 12px;
-    border-radius: 4px;
-}
-
-.mention-results {
-    background: var(--bg);
-    color: var(--assistant);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 8px;
-    margin: 0;
-    max-height: 200px;
-    overflow: auto;
-    font-size: 12px;
-    white-space: pre-wrap;
-    word-break: break-word;
-    min-height: 32px;
-}
-
-.mention-form menu {
+.group-edit-form menu {
     display: flex;
     justify-content: flex-end;
     gap: 8px;
@@ -781,7 +874,7 @@ dialog.edge-memo::backdrop {
     padding: 0;
 }
 
-.mention-form menu button {
+.group-edit-form menu button {
     background: var(--surface-2);
     color: var(--text);
     border: 1px solid var(--border);
@@ -791,22 +884,221 @@ dialog.edge-memo::backdrop {
     font-size: 12px;
 }
 
-.mention-form menu button:hover {
+.group-edit-form menu button:hover {
     background: var(--border);
 }
 
-#mention-adopt {
+#group-edit-save {
     background: var(--user);
     color: white;
     border-color: transparent;
     font-weight: 600;
 }
 
-#mention-adopt:hover:not([disabled]) {
+#group-edit-save:hover {
     background: var(--accent);
 }
 
-#mention-adopt[disabled] {
+#group-edit-delete {
+    background: transparent;
+    color: var(--error);
+    border-color: var(--error);
+    margin-right: auto;
+}
+
+#group-edit-delete:hover {
+    background: rgba(248, 81, 73, 0.1);
+}
+
+/* ---------------------------------------------------------------------------
+ * Stage L: Curator panel (isolated scope-bound Q&A)
+ * ------------------------------------------------------------------------ */
+
+dialog.curator-panel {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0;
+    width: min(560px, 92vw);
+    max-height: 86vh;
+}
+
+dialog.curator-panel::backdrop {
+    background: rgba(0, 0, 0, 0.6);
+}
+
+.curator-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 18px 20px;
+}
+
+.curator-header h2 {
+    margin: 0;
+    font-size: 16px;
+}
+
+.curator-subtitle {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.curator-scope {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+}
+
+.curator-scope-label {
+    color: var(--muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 11px;
+}
+
+.curator-mode {
+    display: flex;
+    flex-direction: row;
+    gap: 16px;
+    align-items: center;
+    margin: 0;
+    padding: 4px 0 0;
+    border: none;
+    font-size: 12px;
+}
+
+.curator-mode legend {
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0;
+    margin-right: 6px;
+}
+
+.curator-mode label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    color: var(--text);
+}
+
+.curator-question-label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.curator-question-label textarea {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 13px;
+    resize: vertical;
+}
+
+.curator-answer {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-top: 1px dashed var(--border);
+    padding-top: 10px;
+}
+
+.curator-answer[hidden] {
+    display: none;
+}
+
+.curator-answer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+}
+
+.curator-role {
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent);
+}
+
+.curator-status {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.curator-answer-body {
+    margin: 0;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    white-space: pre-wrap;
+    max-height: 38vh;
+    overflow-y: auto;
+}
+
+.curator-answer-body.streaming::after {
+    content: "▍";
+    margin-left: 2px;
+    animation: blink 1s steps(2, start) infinite;
+}
+
+.curator-form menu {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.curator-form menu button {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+}
+
+.curator-form menu button:hover {
+    background: var(--border);
+}
+
+#curator-ask {
+    background: var(--user);
+    color: white;
+    border-color: transparent;
+    font-weight: 600;
+}
+
+#curator-ask:hover:not(:disabled) {
+    background: var(--accent);
+}
+
+#curator-ask:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }

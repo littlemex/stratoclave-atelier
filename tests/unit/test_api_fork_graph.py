@@ -29,7 +29,7 @@ def client(stub_config: AtelierConfig, store: InMemoryStore) -> Iterator[TestCli
 async def test_group_fork_graph_collects_sessions_and_edges(
     client: TestClient, store: InMemoryStore
 ) -> None:
-    group = await store.create_group(name="g", description=None)
+    group = await store.create_group(name="g", description=None, color="#3B82F6")
     parent = await store.create_session(title="parent", group_id=group.group_id)
     parent_version = await store.create_version(
         session_id=parent.session_id,

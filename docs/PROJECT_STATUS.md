@@ -1,6 +1,6 @@
 # stratoclave-atelier: Implementation Status
 
-**Last updated**: 2026-05-28 (Stage K follow-up: per-session cwd isolation)
+**Last updated**: 2026-05-28 (Stage L follow-up: git-root memory guard + DAG group colour CSS fix)
 **Project started**: 2026-05-25
 
 ## Overall progress
@@ -20,6 +20,65 @@
 | I     | `DistillSnapshotResolver` (distill-backed snapshot answers) + CLI `session tail` (SSE -> JSON Lines) + `ATELIER_SNAPSHOT_RESOLVER` knob | Done |
 | J     | Branch from chat: `POST /api/sessions/{id}/branch` orchestrator + `AutoNamer` (Loom / Noop) + chat header "Fork now" + per-turn hover + breadcrumb + right-side SVG fork DAG + edge memos in localStorage | Done |
 | K     | Cross-session @ mention: distill `scope_session_ids` end-to-end + `POST /api/memory/{query,adopt}` + raw event search fallback + `AgentRunner._pending_memory` priority chain + chat `@ session` dialog with B/A tabs + memory chip | Done |
+| L     | Groups in Fork DAG (color swatch + right-click assign) + Curator: isolated agent that answers scope-bound questions in its own per-query cwd, replacing the cumbersome `@ session` panel | Done |
+
+### What ships in Stage L follow-up (this delta)
+
+After Stage L landed the user reported that (1) DAG nodes assigned to a
+group did not show the group colour, and (2) a brand-new session in the
+running server "remembered" the previous session's identity ("俺はサトシ")
+and rewrote that fact into its memory dir. Both bugs traced back to the
+same root cause: Claude Code keys auto-memory by *git root*, not by
+cwd, so per-session cwd isolation was silently collapsed whenever
+`ATELIER_AGENT_CWD` sat inside a git checkout (the project's own
+`.atelier-wk/cwd/` worked-by-accident until a `git init` materialised
+above it).
+
+| Bug | Component | Fix | Tests | State |
+|-----|-----------|-----|-------|-------|
+| DAG group colour invisible | `frontend/static/js/chat.js::layoutDag` | `setAttribute("stroke", ...)` is an SVG presentation attribute and loses to the `.dag-node rect { stroke: var(--border) }` CSS rule. Switched to inline `rect.style.stroke = grp.color` + `rect.style.strokeWidth = "2.5px"`, which beats CSS rules. | `tests/unit/test_frontend_mount.py::test_chat_js_paints_group_color_via_inline_style` | Done |
+| Cross-session memory contamination | `src/stratoclave_atelier/agent_runner.py` | Added `_resolve_claude_project_root(cwd)` that walks parents looking for `.git` and uses the git-root slug for `~/.claude/projects/<slug>/memory`. `_claude_project_memory_dir` now slugs the resolved root, so `seed_branch_cwd` copies from / writes to the directory Claude Code actually uses. | `tests/unit/test_agent_runner.py::test_resolve_claude_project_root_finds_git_ancestor`, `::test_claude_project_memory_dir_uses_git_root_slug` | Done |
+| Same bug, defence-in-depth at boot time | `src/stratoclave_atelier/config.py` | New `_git_ancestor` helper + `__post_init__` rule: when `agent_cwd_isolation == "per_session"`, `agent_cwd` MUST NOT live inside a git checkout. Refusing the combination at startup makes the per-session promise structurally enforceable. New env knob `ATELIER_ALLOW_AGENT_CWD_INSIDE_GIT=1` is the documented escape hatch (e.g. for shared mode or operator overrides). | `tests/unit/test_config.py::test_agent_cwd_inside_git_rejected_under_per_session`, `::test_agent_cwd_inside_git_allowed_with_escape_hatch`, `::test_agent_cwd_inside_git_allowed_under_shared_isolation` | Done |
+| Operator hygiene | `docs/STAGE_L_WALKTHROUGH.md` | Documented why `ATELIER_AGENT_CWD` must live outside any git repo (e.g. `~/.atelier/cwd`) and added the contamination repro / fix walkthrough. | -- | Done |
+
+**End-to-end verification (2026-05-28, server PID 43820, port 8123):**
+
+1. Started the server with `ATELIER_AGENT_CWD=$HOME/.atelier/cwd` (no git ancestor) -- guard passes.
+2. Started it with the old `/Users/akazawt/stratoclave-atelier/.atelier-wk/cwd` -- guard refuses with the configured message ("agent_cwd ... sits inside a git repository ...; set `ATELIER_ALLOW_AGENT_CWD_INSIDE_GIT=1` to override").
+3. Session A taught "俺の名前はサトシ" -- Claude Code wrote `MEMORY.md` + `user_name.md` under `~/.claude/projects/-Users-akazawt--atelier-cwd-sessions-<sessionA_id>/memory/`.
+4. Session B (brand-new) asked "俺の名前を知ってる?" -- replied "知らない". Memory dir under `<sessionB_id>` stayed empty. Contamination eliminated.
+5. Created group `contamination-check` (color `#FF6B6B`) and assigned both sessions; `GET /api/groups/<id>/fork-graph` returned `group_id` on each node, and the served `chat.js` carries `rect.style.stroke = grp.color` -- DAG colour now paints.
+
+### What shipped in Stage L (preceding delta)
+
+The user reported that the Stage K `@ session` mention panel was awkward
+to drive (multi-select via list, two tabs, manual adopt step) *and* that
+adopting a memory block back into the active session re-introduced the
+contamination Stage K-cwd had just fixed. Stage L solves both:
+
+1. **Group as a first-class scope on the DAG.** Each Group carries a
+   color; the DAG outlines root nodes with that color. Right-click on a
+   root node assigns/removes the group; forks inherit transitively.
+2. **Curator** answers scope-bound questions in a *separate* loom
+   session, in its own per-query cwd
+   (`${agent_cwd}/curators/<query_id>`), so the Claude Code auto-memory
+   directory keyed by `realpath(cwd)` is empty by construction. The
+   answer streams to a dedicated dialog labelled "Curator" -- never the
+   chat log -- and the underlying loom session is closed at end-of-turn.
+
+| Component | File(s) | State |
+|-----------|---------|-------|
+| `ForkGraphNode.group_id: UUID \| None` so the DAG payload carries enough info to colour root nodes | `src/stratoclave_atelier/core/types.py`, `fork_graph.py`, `api/schemas.py` | Done |
+| Group panel inside the right-side DAG sidebar (create / rename / colour / delete via `<dialog id="group-edit">`) + right-click menu on DAG nodes (rename, assign group, ask Curator) | `frontend/static/index.html`, `frontend/static/js/chat.js`, `frontend/static/css/chat.css` | Done |
+| `@ session` button + `<dialog id="mention-panel">` removed from the chat shell; memory chip kept for adopted blocks (Curator does not adopt) | `frontend/static/index.html`, `frontend/static/css/chat.css`, `frontend/static/js/chat.js`, `tests/unit/test_frontend_mount.py::test_mention_panel_is_removed` | Done |
+| `CuratorRunner` (per-query `${agent_cwd}/curators/<query_id>` cwd, `create_session(BackendConfig(...))`, AcpChunk async iterator, fresh per call -- no warm pool) | `src/stratoclave_atelier/curator.py` | Done |
+| Scope resolvers: `resolve_session_chain(store, session_id)` (root-first ancestor walk) and `resolve_scope_sessions(store, *, scope_kind, scope_id)` (`group` -> all sessions in group; `session` -> chain) | `src/stratoclave_atelier/curator.py` | Done |
+| Context builders: `build_distill_context(memory, sessions, question)` (forwards `top_k=10` + `scope_session_ids`) and `build_raw_context(store, sessions, max_events_per_session=200)` (filters to `turn`/`agent_turn`, caps recency) | `src/stratoclave_atelier/curator.py` | Done |
+| `POST /api/curator/query` SSE endpoint (`scope_kind` / `scope_id` / `context_mode` / `question` / optional `backend`); maps `CuratorScopeError -> 404` and `CuratorContextError -> 503`; emits `event: <chunk_type>` frames terminated by `event: end_turn` | `src/stratoclave_atelier/api/curator.py` | Done |
+| `CuratorRunnerDep` + lifespan wiring (instantiated alongside `AgentRunner` in both injected-store and asyncpg paths) | `src/stratoclave_atelier/api/deps.py`, `server.py`, `api/__init__.py` | Done |
+| Curator panel UI: dialog with scope summary, raw / distill mode toggle, question textarea, streaming answer area labelled "Curator" (not "Assistant"); `fetch` + ReadableStream SSE parser (EventSource cannot POST) | `frontend/static/index.html`, `frontend/static/css/chat.css`, `frontend/static/js/chat.js` | Done |
+| Unit tests: `test_curator.py` (18 tests: scope resolvers / context builders / system prompt / typed errors) and `test_api_curator.py` (8 tests: SSE happy path / 404 / 503 / payload forwarding / disabled runner) | `tests/unit/test_curator.py`, `tests/unit/test_api_curator.py`, `tests/unit/test_frontend_mount.py::test_curator_panel_shell_elements_are_present` | Done |
+| Walkthrough doc | `docs/STAGE_L_WALKTHROUGH.md` | Done |
 
 ### What ships in Stage K follow-up (per-session cwd isolation)
 
@@ -271,8 +330,8 @@ These were excluded by explicit project decision (see `HANDOVER.md`):
 
 | Role    | Owner    | Status   | Current task                   |
 |---------|----------|----------|--------------------------------|
-| Backend | (lead)   | Active   | Stage K shipped: distill scope + `POST /api/memory/{query,adopt}` + AgentRunner pending memory; push pending |
-| UI      | (lead)   | Active   | Stage K shipped: `@ session` dialog with B/A tabs + memory chip above input; auth still pending |
+| Backend | (lead)   | Active   | Stage L shipped: groups in DAG + `CuratorRunner` + `POST /api/curator/query` SSE; auth still pending |
+| UI      | (lead)   | Active   | Stage L shipped: DAG group panel + node right-click menu (assign / ask Curator) + Curator panel dialog with raw / distill toggle |
 
 ## Next steps (priority order)
 

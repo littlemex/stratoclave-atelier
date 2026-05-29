@@ -31,15 +31,33 @@ from stratoclave_atelier.core import (
 # Groups -----------------------------------------------------------------------
 
 
+_HEX_COLOR_PATTERN = r"^#[0-9A-Fa-f]{6}$"
+
+
 class GroupCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
+    color: str = Field(..., pattern=_HEX_COLOR_PATTERN)
+
+
+class GroupUpdate(BaseModel):
+    """Partial update for a group.
+
+    Stage L lets the operator rename / recolour a group from the Fork
+    DAG sidebar after the fact. Both fields are optional; an empty body
+    is rejected by the handler so a misclick does not silently no-op.
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    color: str | None = Field(default=None, pattern=_HEX_COLOR_PATTERN)
 
 
 class GroupRead(BaseModel):
     group_id: UUID
     name: str
     description: str | None
+    color: str
     created_at: datetime
     updated_at: datetime
 
@@ -49,9 +67,23 @@ class GroupRead(BaseModel):
             group_id=group.group_id,
             name=group.name,
             description=group.description,
+            color=group.color,
             created_at=group.created_at,
             updated_at=group.updated_at,
         )
+
+
+class SessionGroupAssign(BaseModel):
+    """Move a session into a group, or remove it from any group.
+
+    ``group_id = None`` removes the session from its current group; a
+    UUID assigns it. Stage L only accepts assignments on root sessions
+    (``parent_session_id IS NULL``) -- forks inherit their root's
+    grouping by way of the DAG and should not be re-grouped
+    independently.
+    """
+
+    group_id: UUID | None = None
 
 
 # Sessions ---------------------------------------------------------------------
@@ -347,6 +379,7 @@ class ForkGraphNodeRead(BaseModel):
     parent_version_id: UUID | None
     fork_seq: int | None
     versions: list[ForkGraphVersionRead]
+    group_id: UUID | None = None
 
     @classmethod
     def from_domain(cls, node: ForkGraphNode) -> ForkGraphNodeRead:
@@ -358,6 +391,7 @@ class ForkGraphNodeRead(BaseModel):
             parent_version_id=node.parent_version_id,
             fork_seq=node.fork_seq,
             versions=[ForkGraphVersionRead.from_domain(v) for v in node.versions],
+            group_id=node.group_id,
         )
 
 
