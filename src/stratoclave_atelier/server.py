@@ -112,9 +112,7 @@ def create_app(
         app.state.agent_runner = AgentRunner(
             config=cfg, store=runtime_store, bus=bus, memory=memory
         )
-        app.state.curator_runner = CuratorRunner(
-            config=cfg, store=runtime_store, memory=memory
-        )
+        app.state.curator_runner = CuratorRunner(config=cfg, store=runtime_store, memory=memory)
         try:
             yield
         finally:

@@ -86,9 +86,7 @@ class AsyncpgStore(Store):
         async with self._engine.connect() as conn:
             row = (
                 await conn.execute(
-                    text(
-                        f"SELECT {self._GROUP_COLUMNS} FROM groups WHERE group_id = :gid"
-                    ),
+                    text(f"SELECT {self._GROUP_COLUMNS} FROM groups WHERE group_id = :gid"),
                     {"gid": group_id},
                 )
             ).one_or_none()
@@ -100,9 +98,7 @@ class AsyncpgStore(Store):
         async with self._engine.connect() as conn:
             rows = (
                 await conn.execute(
-                    text(
-                        f"SELECT {self._GROUP_COLUMNS} FROM groups ORDER BY created_at"
-                    )
+                    text(f"SELECT {self._GROUP_COLUMNS} FROM groups ORDER BY created_at")
                 )
             ).all()
         return [_row_to_group(r) for r in rows]

@@ -79,9 +79,7 @@ def store() -> InMemoryStore:
 async def test_resolve_session_chain_returns_root_first(store: InMemoryStore) -> None:
     root = await store.create_session(title="root")
     child = await store.create_session(title="child", parent_session_id=root.session_id)
-    grand = await store.create_session(
-        title="grand", parent_session_id=child.session_id
-    )
+    grand = await store.create_session(title="grand", parent_session_id=child.session_id)
 
     chain = await resolve_session_chain(store, grand.session_id)
     titles = [s.title for s in chain]
@@ -106,9 +104,7 @@ async def test_resolve_scope_sessions_group(store: InMemoryStore) -> None:
     b = await store.create_session(title="b", group_id=group.group_id)
     other = await store.create_session(title="other")
 
-    sessions = await resolve_scope_sessions(
-        store, scope_kind="group", scope_id=group.group_id
-    )
+    sessions = await resolve_scope_sessions(store, scope_kind="group", scope_id=group.group_id)
     ids = {s.session_id for s in sessions}
     assert ids == {a.session_id, b.session_id}
     assert other.session_id not in ids
@@ -119,9 +115,7 @@ async def test_resolve_scope_sessions_session_returns_chain(store: InMemoryStore
     root = await store.create_session(title="root")
     child = await store.create_session(title="child", parent_session_id=root.session_id)
 
-    sessions = await resolve_scope_sessions(
-        store, scope_kind="session", scope_id=child.session_id
-    )
+    sessions = await resolve_scope_sessions(store, scope_kind="session", scope_id=child.session_id)
     titles = [s.title for s in sessions]
     assert titles == ["root", "child"]
 
@@ -129,24 +123,22 @@ async def test_resolve_scope_sessions_session_returns_chain(store: InMemoryStore
 @pytest.mark.asyncio
 async def test_resolve_scope_sessions_session_unknown_raises(store: InMemoryStore) -> None:
     with pytest.raises(CuratorScopeError):
-        await resolve_scope_sessions(
-            store, scope_kind="session", scope_id=uuid4()
-        )
+        await resolve_scope_sessions(store, scope_kind="session", scope_id=uuid4())
 
 
 @pytest.mark.asyncio
 async def test_resolve_scope_sessions_group_unknown_raises(store: InMemoryStore) -> None:
     with pytest.raises(CuratorScopeError):
-        await resolve_scope_sessions(
-            store, scope_kind="group", scope_id=uuid4()
-        )
+        await resolve_scope_sessions(store, scope_kind="group", scope_id=uuid4())
 
 
 @pytest.mark.asyncio
 async def test_resolve_scope_sessions_unsupported_kind(store: InMemoryStore) -> None:
     with pytest.raises(CuratorScopeError):
         await resolve_scope_sessions(
-            store, scope_kind="bogus", scope_id=uuid4()  # type: ignore[arg-type]
+            store,
+            scope_kind="bogus",
+            scope_id=uuid4(),  # type: ignore[arg-type]
         )
 
 
@@ -161,9 +153,7 @@ async def test_build_distill_context_forwards_scope(store: InMemoryStore) -> Non
     b = await store.create_session(title="b")
     memory = _FakeMemory(retrieval="[memo] hit")
 
-    block = await build_distill_context(
-        memory, sessions=[a, b], question="how to X?"
-    )
+    block = await build_distill_context(memory, sessions=[a, b], question="how to X?")
 
     assert block == "[memo] hit"
     assert memory.calls[-1]["query"] == "how to X?"
@@ -228,9 +218,7 @@ async def test_build_raw_context_caps_per_session(store: InMemoryStore) -> None:
             payload={"role": "user", "content": f"msg{i}"},
         )
 
-    block = await build_raw_context(
-        store, sessions=[session], max_events_per_session=2
-    )
+    block = await build_raw_context(store, sessions=[session], max_events_per_session=2)
 
     assert "msg3" in block
     assert "msg4" in block

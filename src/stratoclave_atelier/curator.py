@@ -76,9 +76,7 @@ class CuratorContextError(RuntimeError):
     """
 
 
-async def resolve_session_chain(
-    store: Store, session_id: UUID
-) -> list[Session]:
+async def resolve_session_chain(store: Store, session_id: UUID) -> list[Session]:
     """Return the session and every ancestor up to the root.
 
     The chain is returned root-first, mirroring the breadcrumb the SPA
@@ -152,8 +150,7 @@ async def build_distill_context(
     )
     if not block:
         return (
-            "(no distilled memory matched this scope; the Curator was given "
-            "an empty memory block.)"
+            "(no distilled memory matched this scope; the Curator was given an empty memory block.)"
         )
     return block
 
@@ -176,9 +173,7 @@ async def build_raw_context(
     blocks: list[str] = []
     for session in sessions:
         events = await store.list_events(session.session_id)
-        kept: list[Event] = [
-            e for e in events if e.kind in ("turn", "agent_turn")
-        ]
+        kept: list[Event] = [e for e in events if e.kind in ("turn", "agent_turn")]
         kept = kept[-max_events_per_session:]
         lines = [f"## session {session.title or session.session_id} ({session.session_id})"]
         for ev in kept:
@@ -228,9 +223,7 @@ class CuratorRunner:
         a server with no backend cannot run Curator queries either.
         """
 
-        return self._config.agent_backend != "none" or bool(
-            self._config.resolved_backends()
-        )
+        return self._config.agent_backend != "none" or bool(self._config.resolved_backends())
 
     def _resolve_backend(self, requested: str | None) -> str:
         if requested:
@@ -298,9 +291,7 @@ class CuratorRunner:
         elif context_mode == "raw":
             context = await build_raw_context(self._store, sessions=sessions)
         else:
-            raise CuratorContextError(
-                f"unsupported context_mode: {context_mode!r}"
-            )
+            raise CuratorContextError(f"unsupported context_mode: {context_mode!r}")
 
         query_id = uuid4()
         cwd = self._resolve_query_cwd(backend=backend_name, query_id=query_id)
@@ -322,9 +313,7 @@ class CuratorRunner:
                 try:
                     await loom_session.close()
                 except Exception:
-                    logger.exception(
-                        "error closing curator session %s", query_id
-                    )
+                    logger.exception("error closing curator session %s", query_id)
 
         return _stream()
 

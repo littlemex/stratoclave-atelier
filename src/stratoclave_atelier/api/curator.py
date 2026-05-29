@@ -116,9 +116,7 @@ async def query_curator(
             backend=body.backend,
         )
     except CuratorScopeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except CuratorContextError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
@@ -130,9 +128,7 @@ async def query_curator(
                 yield _format_chunk(chunk.chunk_type, dict(chunk.content))
         except Exception as exc:  # pragma: no cover -- backend failure path
             logger.exception("curator stream failed")
-            yield _format_chunk(
-                "error", {"error": str(exc), "type": exc.__class__.__name__}
-            )
+            yield _format_chunk("error", {"error": str(exc), "type": exc.__class__.__name__})
         finally:
             yield _format_chunk("end_turn", {})
 

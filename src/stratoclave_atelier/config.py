@@ -47,6 +47,7 @@ def _git_ancestor(cwd: Path) -> Path | None:
             return candidate
     return None
 
+
 AtelierAuthMode = Literal["none", "bearer", "stratoclave_cognito"]
 AtelierAgentBackend = Literal["none", "claude_code", "kiro_code", "mock"]
 AtelierSnapshotResolver = Literal["echo", "distill"]
@@ -272,10 +273,7 @@ class AtelierConfig:
         # exists as an explicit escape hatch when this is intentional
         # (e.g. ``shared`` isolation mode, or the operator owns the
         # contamination risk).
-        if (
-            self.agent_cwd_isolation == "per_session"
-            and not self.allow_agent_cwd_inside_git
-        ):
+        if self.agent_cwd_isolation == "per_session" and not self.allow_agent_cwd_inside_git:
             for name in self.resolved_backends() or ():
                 cwd = self.cwd_for_backend(name)
                 if cwd and _git_ancestor(Path(cwd)) is not None:

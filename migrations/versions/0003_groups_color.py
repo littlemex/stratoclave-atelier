@@ -58,8 +58,7 @@ def upgrade() -> None:
     )
     op.execute("ALTER TABLE groups ALTER COLUMN color SET NOT NULL")
     op.execute(
-        "ALTER TABLE groups "
-        "ADD CONSTRAINT groups_color_format CHECK (color ~ '^#[0-9A-Fa-f]{6}$')"
+        "ALTER TABLE groups ADD CONSTRAINT groups_color_format CHECK (color ~ '^#[0-9A-Fa-f]{6}$')"
     )
 
 
